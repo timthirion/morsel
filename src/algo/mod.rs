@@ -13,12 +13,12 @@
 //!
 //! Algorithms are added incrementally as the library develops.
 
+pub mod decimate;
 pub mod remesh;
 pub mod smooth;
 pub mod subdivide;
 
 // Modules will be added as algorithms are implemented:
-// pub mod decimate;
 // pub mod parameterize;
 // pub mod geodesic;
 // pub mod curvature;
