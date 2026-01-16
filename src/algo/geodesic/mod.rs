@@ -5,7 +5,8 @@
 //!
 //! # Available Algorithms
 //!
-//! - [`dijkstra`]: Graph-based shortest path along mesh edges
+//! - [`dijkstra`]: Graph-based shortest path along mesh edges (exact on edge graph)
+//! - [`heat_method`]: Heat diffusion based geodesics (smooth approximation)
 //!
 //! # Example
 //!
@@ -31,10 +32,12 @@
 //! ```
 
 mod dijkstra;
+mod heat;
 
 use std::marker::PhantomData;
 
 pub use dijkstra::{dijkstra, dijkstra_multiple, DijkstraOptions};
+pub use heat::{heat_method, heat_method_multiple, HeatMethodOptions};
 
 use crate::mesh::{MeshIndex, VertexId};
 

@@ -44,7 +44,7 @@
 
 mod arap;
 mod lscm;
-mod sparse;
+pub mod sparse;
 mod uv;
 
 pub use arap::{arap, ARAPOptions};
