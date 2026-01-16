@@ -28,11 +28,28 @@ gltf = "1.4"           # glTF format
 # Error handling
 thiserror = "1.0"
 
+# Viewer dependencies (optional, for viewer binary)
+wgpu = { version = "24", optional = true }
+winit = { version = "0.30", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+env_logger = { version = "0.11", optional = true }
+log = { version = "0.4", optional = true }
+
+[features]
+default = []
+viewer = ["wgpu", "winit", "pollster", "bytemuck", "env_logger", "log"]
+
 [dev-dependencies]
 approx = "0.5"
 criterion = "0.5"
 rand = "0.8"
 tempfile = "3.10"
+
+[[bin]]
+name = "morsel-view"
+path = "src/bin/morsel-view/main.rs"
+required-features = ["viewer"]
 
 [[bench]]
 name = "mesh_ops"
