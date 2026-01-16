@@ -97,6 +97,10 @@ pub enum MeshError {
         /// Reason the value is invalid.
         reason: &'static str,
     },
+
+    /// Mesh has no boundary (required for parameterization).
+    #[error("mesh has no boundary (parameterization requires disk topology)")]
+    NoBoundary,
 }
 
 impl MeshError {
