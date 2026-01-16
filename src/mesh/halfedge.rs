@@ -389,6 +389,48 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
         [*self.position(v0), *self.position(v1), *self.position(v2)]
     }
 
+    /// Get the four vertices of a quad face.
+    pub fn face_quad(&self, f: FaceId<I>) -> [VertexId<I>; 4] {
+        let he0 = self.face(f).halfedge;
+        let he1 = self.next(he0);
+        let he2 = self.next(he1);
+        let he3 = self.next(he2);
+        [
+            self.origin(he0),
+            self.origin(he1),
+            self.origin(he2),
+            self.origin(he3),
+        ]
+    }
+
+    /// Get the positions of the four vertices of a quad face.
+    pub fn face_positions_quad(&self, f: FaceId<I>) -> [Point3<f64>; 4] {
+        let [v0, v1, v2, v3] = self.face_quad(f);
+        [
+            *self.position(v0),
+            *self.position(v1),
+            *self.position(v2),
+            *self.position(v3),
+        ]
+    }
+
+    /// Count the number of vertices in a face.
+    ///
+    /// This works for any polygon (triangles, quads, or n-gons).
+    pub fn face_vertex_count(&self, f: FaceId<I>) -> usize {
+        self.face_halfedges(f).count()
+    }
+
+    /// Check if all faces in the mesh are triangles.
+    pub fn is_triangle_mesh(&self) -> bool {
+        self.face_ids().all(|f| self.face_vertex_count(f) == 3)
+    }
+
+    /// Check if all faces in the mesh are quads.
+    pub fn is_quad_mesh(&self) -> bool {
+        self.face_ids().all(|f| self.face_vertex_count(f) == 4)
+    }
+
     // ==================== Geometry ====================
 
     /// Compute the normal of a face.
@@ -445,10 +487,40 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
         self.vertex_halfedges(v).count()
     }
 
-    /// Compute the centroid of a face.
+    /// Compute the centroid of a triangular face.
     pub fn face_centroid(&self, f: FaceId<I>) -> Point3<f64> {
         let [p0, p1, p2] = self.face_positions(f);
         Point3::from((p0.coords + p1.coords + p2.coords) / 3.0)
+    }
+
+    /// Compute the normal of a quad face.
+    ///
+    /// The normal is computed as the average of the two triangle normals
+    /// (splitting the quad along the diagonal v0-v2).
+    pub fn face_normal_quad(&self, f: FaceId<I>) -> Vector3<f64> {
+        let [p0, p1, p2, p3] = self.face_positions_quad(f);
+        // Split into triangles: (p0, p1, p2) and (p0, p2, p3)
+        let n1 = (p1 - p0).cross(&(p2 - p0));
+        let n2 = (p2 - p0).cross(&(p3 - p0));
+        (n1 + n2).normalize()
+    }
+
+    /// Compute the area of a quad face.
+    ///
+    /// The area is computed as the sum of two triangle areas
+    /// (splitting the quad along the diagonal v0-v2).
+    pub fn face_area_quad(&self, f: FaceId<I>) -> f64 {
+        let [p0, p1, p2, p3] = self.face_positions_quad(f);
+        // Split into triangles: (p0, p1, p2) and (p0, p2, p3)
+        let area1 = 0.5 * (p1 - p0).cross(&(p2 - p0)).norm();
+        let area2 = 0.5 * (p2 - p0).cross(&(p3 - p0)).norm();
+        area1 + area2
+    }
+
+    /// Compute the centroid of a quad face.
+    pub fn face_centroid_quad(&self, f: FaceId<I>) -> Point3<f64> {
+        let [p0, p1, p2, p3] = self.face_positions_quad(f);
+        Point3::from((p0.coords + p1.coords + p2.coords + p3.coords) / 4.0)
     }
 
     /// Compute the bounding box of the mesh.

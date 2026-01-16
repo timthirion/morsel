@@ -43,7 +43,7 @@ mod builder;
 mod halfedge;
 mod index;
 
-pub use builder::{build_from_triangles, to_face_vertex};
+pub use builder::{build_from_quads, build_from_triangles, to_face_vertex, to_face_vertex_quads};
 pub use halfedge::{Face, HalfEdge, HalfEdgeMesh, Vertex};
 pub use index::{
     DefaultIndexFamily, EdgeId, FaceId, HalfEdgeId, LargeIndexFamily, MeshIndex, MeshIndexFamily,
