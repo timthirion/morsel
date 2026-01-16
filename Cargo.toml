@@ -1,0 +1,39 @@
+[package]
+name = "morsel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+license = "Apache-2.0"
+description = "A comprehensive 3D mesh processing library for geometry processing research"
+repository = "https://github.com/timthirion/morsel"
+keywords = ["mesh", "geometry", "half-edge", "computational-geometry", "3d"]
+categories = ["algorithms", "graphics", "mathematics", "science"]
+
+[dependencies]
+# Linear algebra
+nalgebra = "0.33"
+
+# Exact geometric predicates
+exactum = { path = "../exactum" }
+
+# Approximate geometry operations
+approxum = { path = "../approxum" }
+
+# File I/O
+tobj = "4.0"           # OBJ format
+stl_io = "0.7"         # STL format
+ply-rs = "0.1"         # PLY format
+gltf = "1.4"           # glTF format
+
+# Error handling
+thiserror = "1.0"
+
+[dev-dependencies]
+approx = "0.5"
+criterion = "0.5"
+rand = "0.8"
+tempfile = "3.10"
+
+[[bench]]
+name = "mesh_ops"
+harness = false
