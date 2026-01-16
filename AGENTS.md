@@ -78,15 +78,20 @@ Supported via standard crates:
 
 ## Algorithm Priority Order
 
-1. I/O + data structure (done - foundation)
-2. Smoothing (Laplacian, bilateral, mean curvature flow)
-3. Remeshing (isotropic, anisotropic, CVT-based)
-4. Decimation (QEM, edge collapse)
-5. Subdivision (Loop, Catmull-Clark)
-6. Parameterization (LSCM, ARAP, conformal)
-7. Geodesics (Dijkstra, heat method, exact polyhedral)
-8. Curvature computation
+1. I/O + data structure (done)
+2. Smoothing (Laplacian, bilateral, mean curvature flow) (done)
+3. Remeshing (isotropic, anisotropic, CVT-based) (done)
+4. Decimation (QEM, edge collapse) (done)
+5. Subdivision (Loop, Catmull-Clark) (done)
+6. Parameterization (LSCM, ARAP) (done)
+7. Geodesics (Dijkstra, heat method) (done)
+8. Curvature computation (done)
 9. Mesh booleans
+
+## Tools
+
+10. CLI utility (`morsel` command) - run algorithms from command line
+11. 3D mesh viewer - interactive inspection with orbit camera, solid/wireframe toggle
 
 ## Project Structure
 
@@ -116,7 +121,7 @@ morsel/
 ## Scope Exclusions (for now)
 
 - Point cloud operations (mesh only)
-- GPU compute / rendering
+- GPU compute (rendering is OK for viewer)
 - Animation / skinning
 
 ## Research Goals
