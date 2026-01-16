@@ -13,8 +13,9 @@
 //!
 //! Algorithms are added incrementally as the library develops.
 
+pub mod smooth;
+
 // Modules will be added as algorithms are implemented:
-// pub mod smooth;
 // pub mod remesh;
 // pub mod decimate;
 // pub mod subdivide;
