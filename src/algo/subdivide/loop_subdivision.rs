@@ -1,37 +1,4 @@
-//! Mesh subdivision algorithms.
-//!
-//! This module provides algorithms for subdividing triangle meshes to create
-//! smoother surfaces with more triangles.
-//!
-//! # Loop Subdivision
-//!
-//! Loop subdivision (Loop, 1987) is an approximating subdivision scheme for
-//! triangle meshes. Each iteration:
-//!
-//! 1. Inserts new vertices at edge midpoints (weighted positions)
-//! 2. Updates original vertex positions based on neighbors
-//! 3. Splits each triangle into 4 smaller triangles
-//!
-//! The result converges to a C² continuous surface (C¹ at extraordinary vertices).
-//!
-//! # Example
-//!
-//! ```no_run
-//! use morsel::prelude::*;
-//! use morsel::algo::subdivide::{loop_subdivide, SubdivideOptions};
-//!
-//! let mut mesh: HalfEdgeMesh = morsel::io::load("input.obj").unwrap();
-//!
-//! let options = SubdivideOptions::new(2); // 2 iterations
-//! loop_subdivide(&mut mesh, &options);
-//!
-//! morsel::io::save(&mesh, "output.obj").unwrap();
-//! ```
-//!
-//! # References
-//!
-//! - Loop, C. (1987). "Smooth Subdivision Surfaces Based on Triangles."
-//!   Master's thesis, University of Utah.
+//! Loop subdivision for triangle meshes.
 
 use std::collections::HashMap;
 
@@ -39,32 +6,7 @@ use nalgebra::{Point3, Vector3};
 
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
-/// Options for subdivision algorithms.
-#[derive(Debug, Clone)]
-pub struct SubdivideOptions {
-    /// Number of subdivision iterations.
-    pub iterations: usize,
-
-    /// Whether to preserve sharp boundary edges.
-    /// If true, boundary edges use simpler linear interpolation.
-    pub preserve_boundary: bool,
-}
-
-impl SubdivideOptions {
-    /// Create options with the specified number of iterations.
-    pub fn new(iterations: usize) -> Self {
-        Self {
-            iterations,
-            preserve_boundary: true,
-        }
-    }
-
-    /// Set whether to preserve boundary edges.
-    pub fn with_preserve_boundary(mut self, preserve: bool) -> Self {
-        self.preserve_boundary = preserve;
-        self
-    }
-}
+use super::SubdivideOptions;
 
 /// Performs Loop subdivision on a triangle mesh.
 ///
