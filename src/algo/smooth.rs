@@ -7,6 +7,9 @@
 //!
 //! - [`laplacian_smooth`]: Classic Laplacian smoothing (may cause shrinkage)
 //! - [`taubin_smooth`]: Taubin's λ|μ smoothing (reduces shrinkage)
+//! - [`cotangent_smooth`]: Cotangent-weighted Laplacian (geometry-aware)
+//! - [`bilateral_smooth`]: Feature-preserving smoothing (preserves sharp edges)
+//! - [`mean_curvature_flow`]: Curvature-driven flow (area-minimizing)
 //!
 //! # Example
 //!
@@ -282,6 +285,351 @@ pub fn cotangent_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Smoo
     }
 }
 
+/// Options for bilateral mesh smoothing.
+#[derive(Debug, Clone)]
+pub struct BilateralOptions {
+    /// Number of smoothing iterations.
+    pub iterations: usize,
+
+    /// Spatial weight parameter (controls smoothing based on distance).
+    /// Larger values allow more distant neighbors to contribute.
+    pub sigma_c: f64,
+
+    /// Normal weight parameter (controls smoothing based on normal similarity).
+    /// Larger values allow more normal variation.
+    pub sigma_s: f64,
+
+    /// Whether to preserve boundary vertices.
+    pub preserve_boundary: bool,
+}
+
+impl Default for BilateralOptions {
+    fn default() -> Self {
+        Self {
+            iterations: 1,
+            sigma_c: 1.0,
+            sigma_s: 0.5,
+            preserve_boundary: true,
+        }
+    }
+}
+
+impl BilateralOptions {
+    /// Create options with the specified number of iterations.
+    pub fn with_iterations(mut self, iterations: usize) -> Self {
+        self.iterations = iterations;
+        self
+    }
+
+    /// Set the spatial weight parameter.
+    pub fn with_sigma_c(mut self, sigma_c: f64) -> Self {
+        self.sigma_c = sigma_c.max(0.01);
+        self
+    }
+
+    /// Set the normal weight parameter.
+    pub fn with_sigma_s(mut self, sigma_s: f64) -> Self {
+        self.sigma_s = sigma_s.max(0.01);
+        self
+    }
+}
+
+/// Performs bilateral mesh smoothing.
+///
+/// Bilateral smoothing is a feature-preserving smoothing algorithm that
+/// considers both spatial proximity and surface normal similarity when
+/// averaging vertex positions. This allows it to smooth noise while
+/// preserving sharp features and edges.
+///
+/// # Arguments
+///
+/// * `mesh` - The mesh to smooth (modified in place)
+/// * `options` - Bilateral smoothing parameters
+///
+/// # Algorithm
+///
+/// For each vertex, the new position is computed as:
+/// ```text
+/// p_new = p + λ * Σ w_c(||p_j - p||) * w_s(||n - n_j||) * (p_j - p) / Σ weights
+/// ```
+///
+/// Where:
+/// - `w_c` is the spatial weight (Gaussian based on distance)
+/// - `w_s` is the normal weight (Gaussian based on normal difference)
+///
+/// # Reference
+///
+/// Fleishman, S., Drori, I., & Cohen-Or, D. (2003). "Bilateral mesh denoising."
+/// ACM SIGGRAPH 2003.
+pub fn bilateral_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &BilateralOptions) {
+    if options.iterations == 0 {
+        return;
+    }
+
+    // Identify boundary vertices
+    let boundary_vertices: Vec<bool> = if options.preserve_boundary {
+        mesh.vertex_ids()
+            .map(|v| mesh.is_boundary_vertex(v))
+            .collect()
+    } else {
+        vec![false; mesh.num_vertices()]
+    };
+
+    let sigma_c_sq = options.sigma_c * options.sigma_c;
+    let sigma_s_sq = options.sigma_s * options.sigma_s;
+
+    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+
+    for _ in 0..options.iterations {
+        // Compute vertex normals for this iteration
+        let normals = compute_vertex_normals(mesh);
+
+        new_positions.clear();
+
+        for vid in mesh.vertex_ids() {
+            if boundary_vertices[vid.index()] {
+                new_positions.push(*mesh.position(vid));
+                continue;
+            }
+
+            let pos = mesh.position(vid);
+            let normal = &normals[vid.index()];
+
+            let mut weighted_sum = Vector3::zeros();
+            let mut weight_total = 0.0;
+
+            for neighbor_id in mesh.vertex_neighbors(vid) {
+                let neighbor_pos = mesh.position(neighbor_id);
+                let neighbor_normal = &normals[neighbor_id.index()];
+
+                // Spatial weight (based on distance)
+                let dist_sq = (neighbor_pos - pos).norm_squared();
+                let w_c = (-dist_sq / (2.0 * sigma_c_sq)).exp();
+
+                // Normal weight (based on normal difference)
+                let normal_diff_sq = (neighbor_normal - normal).norm_squared();
+                let w_s = (-normal_diff_sq / (2.0 * sigma_s_sq)).exp();
+
+                let weight = w_c * w_s;
+                weighted_sum += weight * (neighbor_pos - pos);
+                weight_total += weight;
+            }
+
+            if weight_total > 1e-10 {
+                new_positions.push(Point3::from(pos.coords + weighted_sum / weight_total));
+            } else {
+                new_positions.push(*pos);
+            }
+        }
+
+        // Apply new positions
+        for i in 0..mesh.num_vertices() {
+            let vid = VertexId::new(i);
+            mesh.set_position(vid, new_positions[i]);
+        }
+    }
+}
+
+/// Options for mean curvature flow.
+#[derive(Debug, Clone)]
+pub struct CurvatureFlowOptions {
+    /// Number of flow iterations.
+    pub iterations: usize,
+
+    /// Time step for integration (smaller = more stable, larger = faster).
+    pub time_step: f64,
+
+    /// Whether to preserve boundary vertices.
+    pub preserve_boundary: bool,
+
+    /// Whether to use implicit integration (more stable for larger time steps).
+    pub implicit: bool,
+}
+
+impl Default for CurvatureFlowOptions {
+    fn default() -> Self {
+        Self {
+            iterations: 1,
+            time_step: 0.001,
+            preserve_boundary: true,
+            implicit: false,
+        }
+    }
+}
+
+impl CurvatureFlowOptions {
+    /// Create options with the specified number of iterations.
+    pub fn with_iterations(mut self, iterations: usize) -> Self {
+        self.iterations = iterations;
+        self
+    }
+
+    /// Set the time step.
+    pub fn with_time_step(mut self, time_step: f64) -> Self {
+        self.time_step = time_step.max(1e-6);
+        self
+    }
+}
+
+/// Performs mean curvature flow on a mesh.
+///
+/// Mean curvature flow moves each vertex in the direction of mean curvature,
+/// which tends to smooth the surface while minimizing surface area. This is
+/// a more geometrically motivated smoothing that preserves features better
+/// than uniform Laplacian smoothing.
+///
+/// # Arguments
+///
+/// * `mesh` - The mesh to smooth (modified in place)
+/// * `options` - Flow parameters
+///
+/// # Algorithm
+///
+/// The mean curvature at each vertex is computed using the cotangent formula:
+/// ```text
+/// H * n = (1 / 2A) * Σ (cot α_ij + cot β_ij) * (p_j - p_i)
+/// ```
+///
+/// Where α_ij and β_ij are the angles opposite to edge (i,j) in the two
+/// adjacent triangles, and A is the vertex area.
+///
+/// # Note
+///
+/// This is an explicit integration scheme. For stability, use small time steps
+/// (around 0.001 or smaller). For aggressive smoothing, increase iterations
+/// rather than time step.
+///
+/// # Reference
+///
+/// Desbrun, M., et al. (1999). "Implicit fairing of irregular meshes using
+/// diffusion and curvature flow." SIGGRAPH 99.
+pub fn mean_curvature_flow<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CurvatureFlowOptions) {
+    if options.iterations == 0 {
+        return;
+    }
+
+    // Identify boundary vertices
+    let boundary_vertices: Vec<bool> = if options.preserve_boundary {
+        mesh.vertex_ids()
+            .map(|v| mesh.is_boundary_vertex(v))
+            .collect()
+    } else {
+        vec![false; mesh.num_vertices()]
+    };
+
+    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+
+    for _ in 0..options.iterations {
+        new_positions.clear();
+
+        for vid in mesh.vertex_ids() {
+            if boundary_vertices[vid.index()] {
+                new_positions.push(*mesh.position(vid));
+                continue;
+            }
+
+            let pos = *mesh.position(vid);
+
+            // Compute mean curvature vector using cotangent weights
+            let (curvature_vector, area) = compute_mean_curvature_vector(mesh, vid);
+
+            if area > 1e-10 {
+                // Move in direction of mean curvature
+                let displacement = options.time_step * curvature_vector;
+                new_positions.push(Point3::from(pos.coords + displacement));
+            } else {
+                new_positions.push(pos);
+            }
+        }
+
+        // Apply new positions
+        for i in 0..mesh.num_vertices() {
+            let vid = VertexId::new(i);
+            mesh.set_position(vid, new_positions[i]);
+        }
+    }
+}
+
+/// Compute the mean curvature vector at a vertex.
+///
+/// Returns (curvature_vector, vertex_area).
+/// The curvature vector points in the direction of mean curvature normal.
+fn compute_mean_curvature_vector<I: MeshIndex>(
+    mesh: &HalfEdgeMesh<I>,
+    v: VertexId<I>,
+) -> (Vector3<f64>, f64) {
+    let pos = *mesh.position(v);
+
+    let mut curvature_sum = Vector3::zeros();
+    let mut area = 0.0;
+
+    for he in mesh.vertex_halfedges(v) {
+        let neighbor = mesh.dest(he);
+        let neighbor_pos = mesh.position(neighbor);
+
+        // Get cotangent weight for this edge
+        let weight = compute_edge_cotangent_weight(mesh, he);
+
+        // Accumulate weighted edge vector
+        curvature_sum += weight * (neighbor_pos.coords - pos.coords);
+
+        // Accumulate area (using barycentric/Voronoi area)
+        if !mesh.is_boundary_halfedge(he) {
+            let face_area = compute_triangle_area(
+                &pos,
+                mesh.position(mesh.dest(he)),
+                mesh.position(mesh.dest(mesh.next(he))),
+            );
+            area += face_area / 3.0; // Barycentric contribution
+        }
+    }
+
+    // The mean curvature vector is Hn = (1/2A) * Σ w_ij * (p_j - p_i)
+    if area > 1e-10 {
+        (curvature_sum / (2.0 * area), area)
+    } else {
+        (Vector3::zeros(), 0.0)
+    }
+}
+
+/// Compute the area of a triangle.
+fn compute_triangle_area(p0: &Point3<f64>, p1: &Point3<f64>, p2: &Point3<f64>) -> f64 {
+    let e1 = p1 - p0;
+    let e2 = p2 - p0;
+    e1.cross(&e2).norm() * 0.5
+}
+
+/// Compute vertex normals for all vertices.
+fn compute_vertex_normals<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<Vector3<f64>> {
+    let mut normals = vec![Vector3::zeros(); mesh.num_vertices()];
+
+    // Accumulate area-weighted face normals
+    for fid in mesh.face_ids() {
+        let [v0, v1, v2] = mesh.face_triangle(fid);
+        let p0 = mesh.position(v0);
+        let p1 = mesh.position(v1);
+        let p2 = mesh.position(v2);
+
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        let face_normal = e1.cross(&e2); // Area-weighted
+
+        normals[v0.index()] += face_normal;
+        normals[v1.index()] += face_normal;
+        normals[v2.index()] += face_normal;
+    }
+
+    // Normalize
+    for n in &mut normals {
+        let len = n.norm();
+        if len > 1e-10 {
+            *n /= len;
+        }
+    }
+
+    normals
+}
+
 /// Compute one Laplacian smoothing step for a vertex using uniform weights.
 fn compute_laplacian_step<I: MeshIndex>(
     mesh: &HalfEdgeMesh<I>,
@@ -552,5 +900,116 @@ mod tests {
         for (vid, orig) in mesh.vertex_ids().zip(original.iter()) {
             assert_eq!(mesh.position(vid), orig);
         }
+    }
+
+    #[test]
+    fn test_bilateral_smooth_preserves_boundary() {
+        let mut mesh = create_single_triangle();
+
+        let original: Vec<Point3<f64>> = mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
+
+        let options = BilateralOptions::default().with_iterations(5);
+        bilateral_smooth(&mut mesh, &options);
+
+        // All vertices are boundary, so positions should be unchanged
+        for (vid, orig) in mesh.vertex_ids().zip(original.iter()) {
+            let pos = mesh.position(vid);
+            assert!(
+                (pos - orig).norm() < 1e-10,
+                "Boundary vertex moved"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bilateral_smooth_closed_mesh() {
+        let mut mesh = create_tetrahedron();
+
+        // Just verify the mesh stays valid after smoothing
+        let options = BilateralOptions::default()
+            .with_iterations(3)
+            .with_sigma_c(0.5)
+            .with_sigma_s(0.3);
+        bilateral_smooth(&mut mesh, &options);
+
+        // Mesh should still be valid
+        assert!(mesh.is_valid(), "Mesh should be valid after bilateral smooth");
+
+        // All vertices should still exist and have reasonable positions
+        for vid in mesh.vertex_ids() {
+            let pos = mesh.position(vid);
+            assert!(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite(),
+                    "Vertex position should be finite");
+        }
+    }
+
+    #[test]
+    fn test_mean_curvature_flow_preserves_boundary() {
+        let mut mesh = create_single_triangle();
+
+        let original: Vec<Point3<f64>> = mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
+
+        let options = CurvatureFlowOptions::default().with_iterations(10);
+        mean_curvature_flow(&mut mesh, &options);
+
+        // All vertices are boundary, so positions should be unchanged
+        for (vid, orig) in mesh.vertex_ids().zip(original.iter()) {
+            let pos = mesh.position(vid);
+            assert!(
+                (pos - orig).norm() < 1e-10,
+                "Boundary vertex moved"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mean_curvature_flow_shrinks_surface() {
+        let mut mesh = create_tetrahedron();
+
+        let original_area = mesh.surface_area();
+
+        // Mean curvature flow should reduce surface area (area-minimizing)
+        let options = CurvatureFlowOptions::default()
+            .with_iterations(100)
+            .with_time_step(0.01);
+        mean_curvature_flow(&mut mesh, &options);
+
+        let new_area = mesh.surface_area();
+
+        // Surface area should decrease
+        assert!(
+            new_area < original_area,
+            "Mean curvature flow should reduce area: {} -> {}",
+            original_area,
+            new_area
+        );
+        assert!(mesh.is_valid(), "Mesh should be valid after flow");
+    }
+
+    #[test]
+    fn test_cotangent_smooth_closed_mesh() {
+        let mut mesh = create_tetrahedron();
+
+        let original_centroid: Vector3<f64> = mesh
+            .vertex_ids()
+            .map(|v| mesh.position(v).coords)
+            .sum::<Vector3<f64>>()
+            / mesh.num_vertices() as f64;
+
+        let options = SmoothOptions::default().with_iterations(5).with_lambda(0.3);
+        cotangent_smooth(&mut mesh, &options);
+
+        // Centroid should be approximately preserved
+        let new_centroid: Vector3<f64> = mesh
+            .vertex_ids()
+            .map(|v| mesh.position(v).coords)
+            .sum::<Vector3<f64>>()
+            / mesh.num_vertices() as f64;
+
+        assert!(
+            (new_centroid - original_centroid).norm() < 0.2,
+            "Centroid drifted too much"
+        );
+        assert!(mesh.is_valid(), "Mesh should be valid after cotangent smooth");
     }
 }
