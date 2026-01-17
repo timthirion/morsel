@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 
 use nalgebra::{Matrix4, Point3, Vector4};
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::DecimateOptions;
@@ -176,6 +177,23 @@ impl Ord for EdgeCandidate {
 /// * `mesh` - The mesh to decimate (modified in place)
 /// * `options` - Decimation parameters
 pub fn qem_decimate<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &DecimateOptions) {
+    qem_decimate_internal(mesh, options, None);
+}
+
+/// QEM decimation with progress reporting.
+pub fn qem_decimate_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &DecimateOptions,
+    progress: &Progress,
+) {
+    qem_decimate_internal(mesh, options, Some(progress));
+}
+
+fn qem_decimate_internal<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &DecimateOptions,
+    progress: Option<&Progress>,
+) {
     let (vertices, faces) = to_face_vertex(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
@@ -194,6 +212,7 @@ pub fn qem_decimate<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Decimate
         target_faces,
         options.preserve_boundary,
         options.max_error,
+        progress,
     );
 
     // Rebuild the half-edge mesh
@@ -211,6 +230,7 @@ fn decimate_mesh(
     target_faces: usize,
     preserve_boundary: bool,
     max_error: Option<f64>,
+    progress: Option<&Progress>,
 ) -> (Vec<Point3<f64>>, Vec<[usize; 3]>) {
     let n_vertices = vertices.len();
 
@@ -272,7 +292,21 @@ fn decimate_mesh(
     }
 
     // Main decimation loop
+    let initial_face_count = faces.len();
+    let faces_to_remove = initial_face_count - target_faces;
+    let mut last_progress = 0;
+
     while current_face_count > target_faces {
+        // Report progress (every ~5% or so)
+        if let Some(p) = progress {
+            let removed = initial_face_count - current_face_count;
+            let progress_pct = (removed * 100) / faces_to_remove.max(1);
+            if progress_pct >= last_progress + 5 || removed == 0 {
+                p.report(removed, faces_to_remove, "Decimating");
+                last_progress = progress_pct;
+            }
+        }
+
         // Get the edge with minimum error
         let candidate = match heap.pop() {
             Some(c) => c,
@@ -380,6 +414,11 @@ fn decimate_mesh(
                 heap.push(candidate);
             }
         }
+    }
+
+    // Final progress report
+    if let Some(p) = progress {
+        p.report(faces_to_remove, faces_to_remove, "Decimating");
     }
 
     // Compact the mesh (remove invalid vertices and faces)

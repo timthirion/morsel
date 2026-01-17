@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::Point3;
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::{
@@ -79,6 +80,25 @@ impl RemeshOptions {
 /// 3. **Edge flipping**: Flip edges to equalize vertex valence
 /// 4. **Tangential smoothing**: Smooth while preserving surface features
 pub fn isotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &RemeshOptions) {
+    isotropic_remesh_internal(mesh, options, None);
+}
+
+/// Performs isotropic remeshing with progress reporting.
+///
+/// See [`isotropic_remesh`] for algorithm details.
+pub fn isotropic_remesh_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &RemeshOptions,
+    progress: &Progress,
+) {
+    isotropic_remesh_internal(mesh, options, Some(progress));
+}
+
+fn isotropic_remesh_internal<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &RemeshOptions,
+    progress: Option<&Progress>,
+) {
     if options.iterations == 0 || options.target_length <= 0.0 {
         return;
     }
@@ -86,20 +106,36 @@ pub fn isotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Reme
     let high = options.target_length * 4.0 / 3.0;
     let low = options.target_length * 4.0 / 5.0;
 
-    for _iter in 0..options.iterations {
-        // Step 1: Split long edges
-        split_long_edges(mesh, high, options.preserve_boundary);
+    // 4 sub-steps per iteration for more granular progress
+    let total_steps = options.iterations * 4;
 
-        // Step 2: Collapse short edges
-        collapse_short_edges(mesh, low, high, options.preserve_boundary);
+    for iter in 0..options.iterations {
+        let base_step = iter * 4;
+
+        // Step 1: Split long edges (with sub-progress)
+        split_long_edges_with_progress(mesh, high, options.preserve_boundary, progress, base_step, total_steps);
+
+        // Step 2: Collapse short edges (with sub-progress)
+        collapse_short_edges_with_progress(mesh, low, high, options.preserve_boundary, progress, base_step + 1, total_steps);
 
         // Step 3: Flip edges to improve valence
+        if let Some(p) = progress {
+            p.report(base_step + 2, total_steps, "Flipping edges");
+        }
         flip_edges_to_improve_valence(mesh, options.preserve_boundary);
 
         // Step 4: Tangential smoothing
+        if let Some(p) = progress {
+            p.report(base_step + 3, total_steps, "Smoothing");
+        }
         for _ in 0..options.smoothing_iterations {
             tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary);
         }
+    }
+
+    // Report completion
+    if let Some(p) = progress {
+        p.report(total_steps, total_steps, "Isotropic remeshing complete");
     }
 }
 
@@ -126,13 +162,21 @@ pub fn average_edge_length<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> f64 {
     }
 }
 
-/// Split all edges longer than the threshold.
-fn split_long_edges<I: MeshIndex>(
+/// Split all edges longer than the threshold (with progress reporting).
+fn split_long_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     threshold: f64,
     preserve_boundary: bool,
+    progress: Option<&Progress>,
+    step: usize,
+    total_steps: usize,
 ) {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
+
+    // First pass: count how many edges need splitting to estimate total work
+    let initial_long_edges = count_long_edges(&vertices, &faces, threshold, preserve_boundary);
+    let mut total_splits = 0usize;
+    let estimated_total = initial_long_edges.max(1);
 
     let mut changed = true;
     while changed {
@@ -169,10 +213,25 @@ fn split_long_edges<I: MeshIndex>(
             break;
         }
 
-        for (v0, v1) in edges_to_split {
-            split_edge(&mut vertices, &mut faces, v0, v1);
+        for (v0, v1) in &edges_to_split {
+            split_edge(&mut vertices, &mut faces, *v0, *v1);
+            total_splits += 1;
             changed = true;
+
+            // Report progress periodically (every 50 splits or so)
+            if let Some(p) = progress {
+                if total_splits % 50 == 0 || total_splits == estimated_total {
+                    // Use estimated_total * 2 as denominator since splitting can create new long edges
+                    let effective_total = (estimated_total * 2).max(total_splits);
+                    p.report_sub(total_splits, effective_total, step, total_steps, "Splitting edges");
+                }
+            }
         }
+    }
+
+    // Final progress update for this step
+    if let Some(p) = progress {
+        p.report_sub(1, 1, step, total_steps, "Splitting edges");
     }
 
     if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
@@ -180,14 +239,58 @@ fn split_long_edges<I: MeshIndex>(
     }
 }
 
-/// Collapse all edges shorter than the threshold.
-fn collapse_short_edges<I: MeshIndex>(
+/// Count edges longer than threshold (for progress estimation).
+fn count_long_edges(
+    vertices: &[Point3<f64>],
+    faces: &[[usize; 3]],
+    threshold: f64,
+    preserve_boundary: bool,
+) -> usize {
+    let mut count = 0;
+    let mut seen_edges: HashSet<(usize, usize)> = HashSet::new();
+
+    for face in faces {
+        for i in 0..3 {
+            let v0 = face[i];
+            let v1 = face[(i + 1) % 3];
+            let edge = if v0 < v1 { (v0, v1) } else { (v1, v0) };
+
+            if seen_edges.contains(&edge) {
+                continue;
+            }
+            seen_edges.insert(edge);
+
+            let p0 = &vertices[v0];
+            let p1 = &vertices[v1];
+            let length = (p1 - p0).norm();
+
+            if length > threshold {
+                if preserve_boundary && is_boundary_edge_in_faces(faces, v0, v1) {
+                    continue;
+                }
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Collapse all edges shorter than the threshold (with progress reporting).
+fn collapse_short_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     low_threshold: f64,
     high_threshold: f64,
     preserve_boundary: bool,
+    progress: Option<&Progress>,
+    step: usize,
+    total_steps: usize,
 ) {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
+
+    // Count short edges for progress estimation
+    let initial_short_edges = count_short_edges(&vertices, &faces, low_threshold, high_threshold, preserve_boundary);
+    let estimated_total = initial_short_edges.max(1);
+    let mut total_collapses = 0usize;
 
     let mut changed = true;
     while changed {
@@ -232,8 +335,21 @@ fn collapse_short_edges<I: MeshIndex>(
 
         if let Some((v0, v1)) = edge_to_collapse {
             collapse_edge(&mut vertices, &mut faces, v0, v1);
+            total_collapses += 1;
             changed = true;
+
+            // Report progress periodically
+            if let Some(p) = progress {
+                if total_collapses % 20 == 0 {
+                    p.report_sub(total_collapses, estimated_total, step, total_steps, "Collapsing edges");
+                }
+            }
         }
+    }
+
+    // Final progress update for this step
+    if let Some(p) = progress {
+        p.report_sub(1, 1, step, total_steps, "Collapsing edges");
     }
 
     let (clean_vertices, clean_faces) = cleanup_mesh(&vertices, &faces);
@@ -243,6 +359,42 @@ fn collapse_short_edges<I: MeshIndex>(
             *mesh = new_mesh;
         }
     }
+}
+
+/// Count edges shorter than threshold (for progress estimation).
+fn count_short_edges(
+    vertices: &[Point3<f64>],
+    faces: &[[usize; 3]],
+    low_threshold: f64,
+    high_threshold: f64,
+    preserve_boundary: bool,
+) -> usize {
+    let mut count = 0;
+    let mut seen_edges: HashSet<(usize, usize)> = HashSet::new();
+
+    for face in faces {
+        for i in 0..3 {
+            let v0 = face[i];
+            let v1 = face[(i + 1) % 3];
+            let edge = if v0 < v1 { (v0, v1) } else { (v1, v0) };
+
+            if seen_edges.contains(&edge) {
+                continue;
+            }
+            seen_edges.insert(edge);
+
+            let p0 = &vertices[v0];
+            let p1 = &vertices[v1];
+            let length = (p1 - p0).norm();
+
+            if length < low_threshold {
+                if can_collapse_edge(vertices, faces, v0, v1, high_threshold, preserve_boundary) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
 }
 
 /// Check if an edge can be safely collapsed.
@@ -376,10 +528,10 @@ mod tests {
         let high = target * 4.0 / 3.0;
         let low = target * 4.0 / 5.0;
 
-        split_long_edges(&mut mesh, high, true);
+        split_long_edges_with_progress(&mut mesh, high, true, None, 0, 4);
         assert!(mesh.is_valid());
 
-        collapse_short_edges(&mut mesh, low, high, true);
+        collapse_short_edges_with_progress(&mut mesh, low, high, true, None, 1, 4);
         assert!(mesh.is_valid());
 
         flip_edges_to_improve_valence(&mut mesh, true);

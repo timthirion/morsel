@@ -17,9 +17,12 @@ pub mod curvature;
 pub mod decimate;
 pub mod geodesic;
 pub mod parameterize;
+pub mod progress;
 pub mod remesh;
 pub mod smooth;
 pub mod subdivide;
+
+pub use progress::Progress;
 
 // Modules will be added as algorithms are implemented:
 // pub mod repair;

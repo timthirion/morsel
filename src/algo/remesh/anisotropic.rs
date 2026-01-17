@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::{
@@ -85,6 +86,25 @@ impl AnisotropicOptions {
 /// This algorithm produces a mesh with edge lengths adapted to local curvature:
 /// shorter edges in high-curvature regions, longer edges in flat regions.
 pub fn anisotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &AnisotropicOptions) {
+    anisotropic_remesh_internal(mesh, options, None);
+}
+
+/// Performs anisotropic remeshing with progress reporting.
+///
+/// See [`anisotropic_remesh`] for algorithm details.
+pub fn anisotropic_remesh_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &AnisotropicOptions,
+    progress: &Progress,
+) {
+    anisotropic_remesh_internal(mesh, options, Some(progress));
+}
+
+fn anisotropic_remesh_internal<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &AnisotropicOptions,
+    progress: Option<&Progress>,
+) {
     if options.iterations == 0
         || options.min_length <= 0.0
         || options.max_length <= options.min_length
@@ -92,7 +112,11 @@ pub fn anisotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &An
         return;
     }
 
-    for _iter in 0..options.iterations {
+    for iter in 0..options.iterations {
+        if let Some(p) = progress {
+            p.report(iter, options.iterations, "Anisotropic remeshing");
+        }
+
         let sizing = compute_sizing_field(mesh, options);
 
         split_long_edges_anisotropic(mesh, &sizing, options.preserve_boundary);
@@ -108,6 +132,11 @@ pub fn anisotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &An
         }
 
         let _ = sizing;
+    }
+
+    // Report completion
+    if let Some(p) = progress {
+        p.report(options.iterations, options.iterations, "Anisotropic remeshing complete");
     }
 }
 

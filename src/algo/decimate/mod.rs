@@ -32,7 +32,7 @@
 
 mod qem;
 
-pub use qem::qem_decimate;
+pub use qem::{qem_decimate, qem_decimate_with_progress};
 
 /// Options for mesh decimation.
 #[derive(Debug, Clone)]

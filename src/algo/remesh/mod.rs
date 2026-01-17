@@ -56,9 +56,14 @@ mod anisotropic;
 mod cvt;
 mod isotropic;
 
-pub use anisotropic::{anisotropic_remesh, compute_sizing_field, AnisotropicOptions, SizingField};
-pub use cvt::{cvt_remesh, CvtOptions};
-pub use isotropic::{average_edge_length, isotropic_remesh, RemeshOptions};
+pub use anisotropic::{
+    anisotropic_remesh, anisotropic_remesh_with_progress, compute_sizing_field, AnisotropicOptions,
+    SizingField,
+};
+pub use cvt::{cvt_remesh, cvt_remesh_with_progress, CvtOptions};
+pub use isotropic::{
+    average_edge_length, isotropic_remesh, isotropic_remesh_with_progress, RemeshOptions,
+};
 
 use std::collections::HashSet;
 

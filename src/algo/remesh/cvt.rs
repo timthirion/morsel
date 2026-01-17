@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::is_boundary_vertex_in_faces;
@@ -81,6 +82,25 @@ impl CvtOptions {
 /// This algorithm optimizes vertex positions by iteratively moving each vertex
 /// to the centroid of its Voronoi cell on the mesh surface.
 pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions) {
+    cvt_remesh_internal(mesh, options, None);
+}
+
+/// Performs CVT-based remeshing with progress reporting.
+///
+/// See [`cvt_remesh`] for algorithm details.
+pub fn cvt_remesh_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &CvtOptions,
+    progress: &Progress,
+) {
+    cvt_remesh_internal(mesh, options, Some(progress));
+}
+
+fn cvt_remesh_internal<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &CvtOptions,
+    progress: Option<&Progress>,
+) {
     if options.iterations == 0 {
         return;
     }
@@ -104,7 +124,11 @@ pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions
         HashSet::new()
     };
 
-    for _iter in 0..options.iterations {
+    for iter in 0..options.iterations {
+        if let Some(p) = progress {
+            p.report(iter, options.iterations, "CVT remeshing (Lloyd iteration)");
+        }
+
         let assignments = assign_to_nearest_seeds(&vertices, &seeds);
         let centroids = compute_voronoi_centroids(&vertices, &faces, &seeds, &assignments);
 
@@ -121,6 +145,10 @@ pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions
         }
 
         if max_movement < options.convergence_threshold {
+            // Report early convergence
+            if let Some(p) = progress {
+                p.report(iter + 1, options.iterations, "CVT converged early");
+            }
             break;
         }
     }
@@ -147,6 +175,11 @@ pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions
         if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &faces) {
             *mesh = new_mesh;
         }
+    }
+
+    // Report completion
+    if let Some(p) = progress {
+        p.report(options.iterations, options.iterations, "CVT remeshing complete");
     }
 }
 

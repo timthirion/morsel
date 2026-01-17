@@ -50,8 +50,8 @@
 mod catmull_clark;
 mod loop_subdivision;
 
-pub use catmull_clark::catmull_clark_subdivide;
-pub use loop_subdivision::loop_subdivide;
+pub use catmull_clark::{catmull_clark_subdivide, catmull_clark_subdivide_with_progress};
+pub use loop_subdivision::{loop_subdivide, loop_subdivide_with_progress};
 
 /// Options for subdivision algorithms.
 #[derive(Debug, Clone)]

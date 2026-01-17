@@ -35,6 +35,8 @@ use nalgebra::{Point3, Vector3};
 
 use crate::mesh::{HalfEdgeId, HalfEdgeMesh, MeshIndex, VertexId};
 
+use super::Progress;
+
 /// Options for mesh smoothing algorithms.
 #[derive(Debug, Clone)]
 pub struct SmoothOptions {
@@ -764,6 +766,126 @@ fn apply_laplacian_step<I: MeshIndex>(
         let vid = VertexId::new(i);
         mesh.set_position(vid, new_positions[i]);
     }
+}
+
+// ============================================================================
+// Progress-enabled variants
+// ============================================================================
+
+/// Laplacian smoothing with progress reporting.
+pub fn laplacian_smooth_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SmoothOptions,
+    progress: &Progress,
+) {
+    if options.iterations == 0 || options.lambda == 0.0 {
+        return;
+    }
+
+    let boundary_vertices: Vec<bool> = if options.preserve_boundary {
+        mesh.vertex_ids()
+            .map(|v| mesh.is_boundary_vertex(v))
+            .collect()
+    } else {
+        vec![false; mesh.num_vertices()]
+    };
+
+    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+
+    for iter in 0..options.iterations {
+        progress.report(iter, options.iterations, "Laplacian smoothing");
+
+        new_positions.clear();
+        for vid in mesh.vertex_ids() {
+            if boundary_vertices[vid.index()] {
+                new_positions.push(*mesh.position(vid));
+            } else {
+                let new_pos = compute_laplacian_step(mesh, vid, options.lambda);
+                new_positions.push(new_pos);
+            }
+        }
+
+        for i in 0..mesh.num_vertices() {
+            let vid = VertexId::new(i);
+            mesh.set_position(vid, new_positions[i]);
+        }
+    }
+    progress.report(options.iterations, options.iterations, "Laplacian smoothing");
+}
+
+/// Taubin smoothing with progress reporting.
+pub fn taubin_smooth_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SmoothOptions,
+    progress: &Progress,
+) {
+    if options.iterations == 0 || options.lambda == 0.0 {
+        return;
+    }
+
+    let k_pb = 0.1_f64;
+    let mu = options.lambda / (k_pb * options.lambda - 1.0);
+
+    let boundary_vertices: Vec<bool> = if options.preserve_boundary {
+        mesh.vertex_ids()
+            .map(|v| mesh.is_boundary_vertex(v))
+            .collect()
+    } else {
+        vec![false; mesh.num_vertices()]
+    };
+
+    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+
+    for iter in 0..options.iterations {
+        progress.report(iter, options.iterations, "Taubin smoothing");
+
+        // Positive step (smoothing)
+        apply_laplacian_step(mesh, &boundary_vertices, options.lambda, &mut new_positions);
+        // Negative step (inflation)
+        apply_laplacian_step(mesh, &boundary_vertices, mu, &mut new_positions);
+    }
+    progress.report(options.iterations, options.iterations, "Taubin smoothing");
+}
+
+/// Cotangent smoothing with progress reporting.
+pub fn cotangent_smooth_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SmoothOptions,
+    progress: &Progress,
+) {
+    if options.iterations == 0 || options.lambda == 0.0 {
+        return;
+    }
+
+    let boundary_vertices: Vec<bool> = if options.preserve_boundary {
+        mesh.vertex_ids()
+            .map(|v| mesh.is_boundary_vertex(v))
+            .collect()
+    } else {
+        vec![false; mesh.num_vertices()]
+    };
+
+    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+
+    for iter in 0..options.iterations {
+        progress.report(iter, options.iterations, "Cotangent smoothing");
+
+        new_positions.clear();
+        for vid in mesh.vertex_ids() {
+            if boundary_vertices[vid.index()] {
+                new_positions.push(*mesh.position(vid));
+            } else {
+                let new_pos = compute_cotangent_laplacian_step(mesh, vid, options.lambda);
+                new_positions.push(new_pos);
+            }
+        }
+
+        for i in 0..mesh.num_vertices() {
+            let vid = VertexId::new(i);
+            mesh.set_position(vid, new_positions[i]);
+        }
+    }
+    progress.report(options.iterations, options.iterations, "Cotangent smoothing");
 }
 
 #[cfg(test)]

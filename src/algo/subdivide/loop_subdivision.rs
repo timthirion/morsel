@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::SubdivideOptions;
@@ -40,6 +41,23 @@ pub fn loop_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Subdiv
     for _ in 0..options.iterations {
         loop_subdivide_once(mesh, options.preserve_boundary);
     }
+}
+
+/// Loop subdivision with progress reporting.
+pub fn loop_subdivide_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+    progress: &Progress,
+) {
+    if options.iterations == 0 {
+        return;
+    }
+
+    for iter in 0..options.iterations {
+        progress.report(iter, options.iterations, "Loop subdivision");
+        loop_subdivide_once(mesh, options.preserve_boundary);
+    }
+    progress.report(options.iterations, options.iterations, "Loop subdivision");
 }
 
 /// Perform one iteration of Loop subdivision.

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::Progress;
 use crate::mesh::{build_from_quads, to_face_vertex_quads, HalfEdgeMesh, MeshIndex};
 
 use super::SubdivideOptions;
@@ -43,6 +44,23 @@ pub fn catmull_clark_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options
     for _ in 0..options.iterations {
         catmull_clark_subdivide_once(mesh, options.preserve_boundary);
     }
+}
+
+/// Catmull-Clark subdivision with progress reporting.
+pub fn catmull_clark_subdivide_with_progress<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+    progress: &Progress,
+) {
+    if options.iterations == 0 {
+        return;
+    }
+
+    for iter in 0..options.iterations {
+        progress.report(iter, options.iterations, "Catmull-Clark subdivision");
+        catmull_clark_subdivide_once(mesh, options.preserve_boundary);
+    }
+    progress.report(options.iterations, options.iterations, "Catmull-Clark subdivision");
 }
 
 /// Perform one iteration of Catmull-Clark subdivision.
