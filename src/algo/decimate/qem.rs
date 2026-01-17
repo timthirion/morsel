@@ -339,9 +339,23 @@ fn decimate_mesh(
             continue;
         }
 
+        // Check if collapse would flip any face normals
+        if would_flip_normals(
+            candidate.v0,
+            candidate.v1,
+            &candidate.optimal_pos,
+            &vertices,
+            &faces,
+            &valid_faces,
+            &edge_faces,
+        ) {
+            continue;
+        }
+
         // Perform the collapse: v1 -> v0
         let v_keep = candidate.v0;
         let v_remove = candidate.v1;
+        let edge = canonical_edge(v_keep, v_remove);
 
         // Update position of kept vertex
         vertices[v_keep] = candidate.optimal_pos;
@@ -356,7 +370,6 @@ fn decimate_mesh(
         valid_vertices[v_remove] = false;
 
         // Update faces: replace v_remove with v_keep, remove degenerate faces
-        let edge = canonical_edge(v_keep, v_remove);
         if let Some(face_indices) = edge_faces.get(&edge) {
             for &fi in face_indices {
                 if valid_faces[fi] {
@@ -580,6 +593,90 @@ fn create_edge_candidate(
 }
 
 /// Check if an edge collapse is valid (won't create non-manifold geometry).
+/// Check if collapsing an edge would flip any face normals.
+///
+/// Returns true if the collapse would flip normals, meaning it should be rejected.
+fn would_flip_normals(
+    v_keep: usize,
+    v_remove: usize,
+    optimal_pos: &Point3<f64>,
+    vertices: &[Point3<f64>],
+    faces: &[[usize; 3]],
+    valid_faces: &[bool],
+    edge_faces: &HashMap<(usize, usize), Vec<usize>>,
+) -> bool {
+    // Get faces that would be removed (adjacent to the edge being collapsed)
+    let edge = canonical_edge(v_keep, v_remove);
+    let removed_faces: HashSet<usize> = edge_faces
+        .get(&edge)
+        .map(|f| f.iter().copied().filter(|&fi| valid_faces[fi]).collect())
+        .unwrap_or_default();
+
+    // Check all faces that contain v_keep or v_remove (but won't be removed)
+    for (fi, face) in faces.iter().enumerate() {
+        if !valid_faces[fi] || removed_faces.contains(&fi) {
+            continue;
+        }
+
+        // Check if this face contains v_keep or v_remove
+        let contains_keep = face.contains(&v_keep);
+        let contains_remove = face.contains(&v_remove);
+
+        if !contains_keep && !contains_remove {
+            continue;
+        }
+
+        // Compute original normal
+        let p0 = vertices[face[0]];
+        let p1 = vertices[face[1]];
+        let p2 = vertices[face[2]];
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        let old_normal = e1.cross(&e2);
+        let old_norm = old_normal.norm();
+
+        if old_norm < 1e-10 {
+            continue; // Degenerate face, skip
+        }
+
+        // Compute new positions after collapse
+        let new_p0 = if face[0] == v_keep || face[0] == v_remove {
+            *optimal_pos
+        } else {
+            vertices[face[0]]
+        };
+        let new_p1 = if face[1] == v_keep || face[1] == v_remove {
+            *optimal_pos
+        } else {
+            vertices[face[1]]
+        };
+        let new_p2 = if face[2] == v_keep || face[2] == v_remove {
+            *optimal_pos
+        } else {
+            vertices[face[2]]
+        };
+
+        let new_e1 = new_p1 - new_p0;
+        let new_e2 = new_p2 - new_p0;
+        let new_normal = new_e1.cross(&new_e2);
+        let new_norm = new_normal.norm();
+
+        // Reject if new triangle would be degenerate or nearly so
+        if new_norm < 1e-10 {
+            return true;
+        }
+
+        // Normalize and check angle between normals
+        // Reject if normal changes by more than ~60 degrees (cos(60°) ≈ 0.5)
+        let cos_angle = old_normal.dot(&new_normal) / (old_norm * new_norm);
+        if cos_angle < 0.5 {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn is_collapse_valid(
     v0: usize,
     v1: usize,
