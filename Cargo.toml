@@ -28,6 +28,9 @@ gltf = "1.4"           # glTF format
 # Error handling
 thiserror = "1.0"
 
+# CLI dependencies (optional, for morsel binary)
+clap = { version = "4", features = ["derive"], optional = true }
+
 # Viewer dependencies (optional, for viewer binary)
 wgpu = { version = "24", optional = true }
 winit = { version = "0.30", optional = true }
@@ -38,6 +41,7 @@ log = { version = "0.4", optional = true }
 
 [features]
 default = []
+cli = ["clap"]
 viewer = ["wgpu", "winit", "pollster", "bytemuck", "env_logger", "log"]
 
 [dev-dependencies]
@@ -45,6 +49,11 @@ approx = "0.5"
 criterion = "0.5"
 rand = "0.8"
 tempfile = "3.10"
+
+[[bin]]
+name = "morsel"
+path = "src/bin/morsel/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "morsel-view"
