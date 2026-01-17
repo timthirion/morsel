@@ -1,4 +1,11 @@
 # morsel
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/morsel_banner_dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="images/morsel_banner_light.svg">
+  <img alt="morsel" src="images/morsel_banner_dark.svg">
+</picture>
+
 Mesh processing in Rust
 
 ## Tools
