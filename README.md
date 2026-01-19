@@ -57,7 +57,7 @@ Run `morsel <command> --help` for detailed options.
 
 ### morsel-view
 
-A 3D mesh viewer for inspecting meshes.
+A 3D mesh viewer for inspecting meshes with optional texture support.
 
 **Install:**
 ```bash
@@ -67,9 +67,17 @@ cargo install --path . --features viewer
 **Usage:**
 ```bash
 morsel-view path/to/mesh.obj
+morsel-view mesh.obj --texture texture.png --parameterize
 ```
 
-Supported formats: `.obj`, `.stl`, `.ply`, `.gltf`, `.glb`
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--texture <file>` | Load a texture image (PNG, JPG, etc.) |
+| `--parameterize` | Compute UV coordinates (cylindrical projection) |
+
+Supported mesh formats: `.obj`, `.stl`, `.ply`, `.gltf`, `.glb`
 
 **Controls:**
 
@@ -79,5 +87,6 @@ Supported formats: `.obj`, `.stl`, `.ply`, `.gltf`, `.glb`
 | Scroll wheel | Zoom in/out |
 | `W` | Toggle wireframe |
 | `B` | Toggle backface culling |
+| `T` | Toggle textured mode |
 | `R` | Reset camera |
 | `Escape` | Quit |

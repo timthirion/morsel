@@ -129,3 +129,20 @@ morsel/
 Target venue: SGP (Symposium on Geometry Processing)
 Timeline: 3-5 years for novel research contribution
 Focus: Computational geometry / geometry processing
+
+## Upcoming Goals
+
+### Parallelization
+- Parallelize mesh algorithms using Rayon for multi-core speedup
+- Target algorithms: smoothing, remeshing, geodesics, parameterization
+- Maintain single-threaded API with parallel implementations under the hood
+- Benchmark parallel vs sequential performance
+
+### Conformal Mappings
+- Implement conformal (angle-preserving) parameterization methods
+- Target methods:
+  - Spectral Conformal Parameterization (SCP)
+  - Boundary First Flattening (BFF)
+  - Discrete Conformal Equivalence
+- Applications: texture mapping, surface analysis, shape correspondence
+- Build on existing LSCM foundation (fix current LSCM issues first)

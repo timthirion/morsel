@@ -179,6 +179,53 @@ impl<I: MeshIndex> UVMap<I> {
     }
 }
 
+/// Generate cylindrical UV projection for a mesh.
+///
+/// Maps vertices to UV coordinates using cylindrical projection around the Y axis.
+/// U is based on the angle around Y, V is based on the height.
+///
+/// # Arguments
+///
+/// * `mesh` - The input mesh
+///
+/// # Returns
+///
+/// UV coordinates for each vertex.
+pub fn cylindrical_projection<I: MeshIndex>(mesh: &crate::mesh::HalfEdgeMesh<I>) -> UVMap<I> {
+    use std::f64::consts::PI;
+
+    let n = mesh.num_vertices();
+    let mut coords = vec![Point2::origin(); n];
+
+    // Find bounding box for normalization
+    let mut min_y = f64::MAX;
+    let mut max_y = f64::MIN;
+
+    for vid in mesh.vertex_ids() {
+        let p = mesh.position(vid);
+        min_y = min_y.min(p.y);
+        max_y = max_y.max(p.y);
+    }
+
+    let y_range = max_y - min_y;
+    let y_scale = if y_range > 1e-10 { 1.0 / y_range } else { 1.0 };
+
+    // Compute cylindrical UVs
+    for vid in mesh.vertex_ids() {
+        let p = mesh.position(vid);
+
+        // U: angle around Y axis, normalized to [0, 1]
+        let u = (p.z.atan2(p.x) + PI) / (2.0 * PI);
+
+        // V: height along Y axis, normalized to [0, 1]
+        let v = (p.y - min_y) * y_scale;
+
+        coords[vid.index()] = Point2::new(u, v);
+    }
+
+    UVMap::new(coords)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

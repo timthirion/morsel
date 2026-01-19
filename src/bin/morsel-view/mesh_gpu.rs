@@ -3,14 +3,16 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use morsel::algo::parameterize::UVMap;
 use morsel::mesh::{HalfEdgeMesh, MeshIndex};
 
-/// GPU vertex with position and normal.
+/// GPU vertex with position, normal, and UV coordinates.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
@@ -32,6 +34,12 @@ impl Vertex {
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x3,
                 },
+                // uv
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -39,7 +47,7 @@ impl Vertex {
 
 /// Mesh data uploaded to the GPU.
 pub struct GpuMesh {
-    /// Vertex buffer containing positions and normals.
+    /// Vertex buffer containing positions, normals, and UVs.
     pub vertex_buffer: wgpu::Buffer,
     /// Index buffer for triangle rendering (used for both solid and wireframe).
     pub index_buffer: wgpu::Buffer,
@@ -49,17 +57,25 @@ pub struct GpuMesh {
     pub center: [f32; 3],
     /// Mesh bounding radius (for camera distance).
     pub radius: f32,
+    /// Whether the mesh has valid UV coordinates.
+    pub has_uvs: bool,
 }
 
 impl GpuMesh {
-    /// Create GPU buffers from a half-edge mesh.
+    /// Create GPU buffers from a half-edge mesh with optional UV coordinates.
     ///
     /// Uses flat shading (per-face normals) for correct rendering of hard edges.
-    pub fn from_halfedge_mesh<I: MeshIndex>(device: &wgpu::Device, mesh: &HalfEdgeMesh<I>) -> Self {
+    pub fn from_halfedge_mesh_with_uvs<I: MeshIndex>(
+        device: &wgpu::Device,
+        mesh: &HalfEdgeMesh<I>,
+        uv_map: Option<&UVMap<I>>,
+    ) -> Self {
         // Use per-face vertices with face normals for flat shading.
         // This duplicates vertices but gives correct shading for hard edges.
         let mut vertices = Vec::with_capacity(mesh.num_faces() * 3);
         let mut indices: Vec<u32> = Vec::with_capacity(mesh.num_faces() * 3);
+
+        let has_uvs = uv_map.is_some();
 
         for fid in mesh.face_ids() {
             let [v0, v1, v2] = mesh.face_triangle(fid);
@@ -68,20 +84,31 @@ impl GpuMesh {
             let p2 = mesh.position(v2);
             let normal = mesh.face_normal(fid);
 
+            // Get UVs if available, otherwise default to (0, 0)
+            let (uv0, uv1, uv2) = if let Some(uvs) = uv_map {
+                (uvs.get(v0), uvs.get(v1), uvs.get(v2))
+            } else {
+                let zero = nalgebra::Point2::new(0.0, 0.0);
+                (zero, zero, zero)
+            };
+
             let base_idx = vertices.len() as u32;
 
-            // Add 3 vertices with the face normal
+            // Add 3 vertices with the face normal and UVs
             vertices.push(Vertex {
                 position: [p0.x as f32, p0.y as f32, p0.z as f32],
                 normal: [normal.x as f32, normal.y as f32, normal.z as f32],
+                uv: [uv0.x as f32, uv0.y as f32],
             });
             vertices.push(Vertex {
                 position: [p1.x as f32, p1.y as f32, p1.z as f32],
                 normal: [normal.x as f32, normal.y as f32, normal.z as f32],
+                uv: [uv1.x as f32, uv1.y as f32],
             });
             vertices.push(Vertex {
                 position: [p2.x as f32, p2.y as f32, p2.z as f32],
                 normal: [normal.x as f32, normal.y as f32, normal.z as f32],
+                uv: [uv2.x as f32, uv2.y as f32],
             });
 
             // Triangle indices
@@ -142,6 +169,7 @@ impl GpuMesh {
             num_indices: indices.len() as u32,
             center,
             radius,
+            has_uvs,
         }
     }
 }

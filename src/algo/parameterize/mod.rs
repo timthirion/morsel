@@ -49,4 +49,4 @@ mod uv;
 
 pub use arap::{arap, ARAPOptions};
 pub use lscm::{lscm, LSCMOptions, PinStrategy, PinnedVertex};
-pub use uv::UVMap;
+pub use uv::{cylindrical_projection, UVMap};

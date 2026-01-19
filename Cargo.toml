@@ -38,11 +38,12 @@ pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1.14", features = ["derive"], optional = true }
 env_logger = { version = "0.11", optional = true }
 log = { version = "0.4", optional = true }
+image = { version = "0.25", optional = true }
 
 [features]
 default = []
 cli = ["clap"]
-viewer = ["wgpu", "winit", "pollster", "bytemuck", "env_logger", "log"]
+viewer = ["wgpu", "winit", "pollster", "bytemuck", "env_logger", "log", "image"]
 
 [dev-dependencies]
 approx = "0.5"
