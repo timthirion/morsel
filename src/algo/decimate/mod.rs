@@ -51,6 +51,10 @@ pub struct DecimateOptions {
     /// Maximum allowed error for a single edge collapse.
     /// Edges with error above this threshold won't be collapsed.
     pub max_error: Option<f64>,
+
+    /// Whether to use parallel execution for initialization (default: true).
+    /// Note: The main decimation loop is inherently sequential.
+    pub parallel: bool,
 }
 
 impl DecimateOptions {
@@ -61,6 +65,7 @@ impl DecimateOptions {
             target_ratio: 0.5,
             preserve_boundary: true,
             max_error: None,
+            parallel: true,
         }
     }
 
@@ -71,6 +76,7 @@ impl DecimateOptions {
             target_ratio: ratio.clamp(0.0, 1.0),
             preserve_boundary: true,
             max_error: None,
+            parallel: true,
         }
     }
 
@@ -83,6 +89,18 @@ impl DecimateOptions {
     /// Set maximum error threshold for edge collapses.
     pub fn with_max_error(mut self, max_error: f64) -> Self {
         self.max_error = Some(max_error);
+        self
+    }
+
+    /// Set whether to use parallel execution for initialization.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 

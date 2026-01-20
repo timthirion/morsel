@@ -4,6 +4,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
 
 use nalgebra::{Matrix4, Point3, Vector4};
+use rayon::prelude::*;
 
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
@@ -212,6 +213,7 @@ fn qem_decimate_internal<I: MeshIndex>(
         target_faces,
         options.preserve_boundary,
         options.max_error,
+        options.parallel,
         progress,
     );
 
@@ -230,6 +232,7 @@ fn decimate_mesh(
     target_faces: usize,
     preserve_boundary: bool,
     max_error: Option<f64>,
+    parallel: bool,
     progress: Option<&Progress>,
 ) -> (Vec<Point3<f64>>, Vec<[usize; 3]>) {
     let n_vertices = vertices.len();
@@ -240,11 +243,11 @@ fn decimate_mesh(
     let mut current_face_count = faces.len();
 
     // Compute initial quadrics for each vertex
-    let mut quadrics = compute_vertex_quadrics(&vertices, &faces);
+    let mut quadrics = compute_vertex_quadrics(&vertices, &faces, parallel);
 
     // Find boundary edges if we need to preserve them
     let boundary_edges = if preserve_boundary {
-        find_boundary_edges(&faces)
+        find_boundary_edges(&faces, parallel)
     } else {
         HashSet::new()
     };
@@ -258,8 +261,9 @@ fn decimate_mesh(
     // Priority queue of edge candidates
     let mut heap: BinaryHeap<EdgeCandidate> = BinaryHeap::new();
 
-    // Initialize heap with all edges
+    // Collect all unique edges first
     let mut seen_edges: HashSet<(usize, usize)> = HashSet::new();
+    let mut edge_list: Vec<(usize, usize)> = Vec::new();
     for (fi, face) in faces.iter().enumerate() {
         if !valid_faces[fi] {
             continue;
@@ -279,16 +283,30 @@ fn decimate_mesh(
                 continue;
             }
 
-            if let Some(candidate) = create_edge_candidate(
-                v0,
-                v1,
-                &vertices,
-                &quadrics,
-                vertex_versions[v0],
-            ) {
-                heap.push(candidate);
-            }
+            edge_list.push(edge);
         }
+    }
+
+    // Create edge candidates (parallelizable)
+    let candidates: Vec<EdgeCandidate> = if parallel {
+        edge_list
+            .par_iter()
+            .filter_map(|&(v0, v1)| {
+                create_edge_candidate(v0, v1, &vertices, &quadrics, 0)
+            })
+            .collect()
+    } else {
+        edge_list
+            .iter()
+            .filter_map(|&(v0, v1)| {
+                create_edge_candidate(v0, v1, &vertices, &quadrics, 0)
+            })
+            .collect()
+    };
+
+    // Add all candidates to the heap
+    for candidate in candidates {
+        heap.push(candidate);
     }
 
     // Main decimation loop
@@ -442,40 +460,80 @@ fn decimate_mesh(
 fn compute_vertex_quadrics(
     vertices: &[Point3<f64>],
     faces: &[[usize; 3]],
+    parallel: bool,
 ) -> Vec<Quadric> {
-    let mut quadrics = vec![Quadric::zero(); vertices.len()];
-
-    for face in faces {
-        let p0 = &vertices[face[0]];
-        let p1 = &vertices[face[1]];
-        let p2 = &vertices[face[2]];
-
-        // Compute plane equation
-        let e1 = p1 - p0;
-        let e2 = p2 - p0;
-        let normal = e1.cross(&e2);
-
-        let len = normal.norm();
-        if len < 1e-10 {
-            continue; // Degenerate face
+    if parallel {
+        // Parallel: compute per-vertex by gathering face contributions
+        // First build vertex-to-face mapping
+        let mut vertex_faces: Vec<Vec<usize>> = vec![Vec::new(); vertices.len()];
+        for (face_idx, face) in faces.iter().enumerate() {
+            vertex_faces[face[0]].push(face_idx);
+            vertex_faces[face[1]].push(face_idx);
+            vertex_faces[face[2]].push(face_idx);
         }
 
-        let n = normal / len;
-        let d = -n.dot(&p0.coords);
+        (0..vertices.len())
+            .into_par_iter()
+            .map(|vi| {
+                let mut quadric = Quadric::zero();
+                for &face_idx in &vertex_faces[vi] {
+                    let face = &faces[face_idx];
+                    let p0 = &vertices[face[0]];
+                    let p1 = &vertices[face[1]];
+                    let p2 = &vertices[face[2]];
 
-        let q = Quadric::from_plane(n.x, n.y, n.z, d);
+                    let e1 = p1 - p0;
+                    let e2 = p2 - p0;
+                    let normal = e1.cross(&e2);
 
-        // Add to all three vertices
-        quadrics[face[0]].add_assign(&q);
-        quadrics[face[1]].add_assign(&q);
-        quadrics[face[2]].add_assign(&q);
+                    let len = normal.norm();
+                    if len < 1e-10 {
+                        continue;
+                    }
+
+                    let n = normal / len;
+                    let d = -n.dot(&p0.coords);
+
+                    quadric.add_assign(&Quadric::from_plane(n.x, n.y, n.z, d));
+                }
+                quadric
+            })
+            .collect()
+    } else {
+        // Sequential: scatter face quadrics to vertices
+        let mut quadrics = vec![Quadric::zero(); vertices.len()];
+
+        for face in faces {
+            let p0 = &vertices[face[0]];
+            let p1 = &vertices[face[1]];
+            let p2 = &vertices[face[2]];
+
+            let e1 = p1 - p0;
+            let e2 = p2 - p0;
+            let normal = e1.cross(&e2);
+
+            let len = normal.norm();
+            if len < 1e-10 {
+                continue;
+            }
+
+            let n = normal / len;
+            let d = -n.dot(&p0.coords);
+
+            let q = Quadric::from_plane(n.x, n.y, n.z, d);
+
+            quadrics[face[0]].add_assign(&q);
+            quadrics[face[1]].add_assign(&q);
+            quadrics[face[2]].add_assign(&q);
+        }
+
+        quadrics
     }
-
-    quadrics
 }
 
 /// Find all boundary edges (edges with only one adjacent face).
-fn find_boundary_edges(faces: &[[usize; 3]]) -> HashSet<(usize, usize)> {
+fn find_boundary_edges(faces: &[[usize; 3]], parallel: bool) -> HashSet<(usize, usize)> {
+    // Build edge counts (this part is inherently sequential for HashMap)
     let mut edge_count: HashMap<(usize, usize), usize> = HashMap::new();
 
     for face in faces {
@@ -485,11 +543,21 @@ fn find_boundary_edges(faces: &[[usize; 3]]) -> HashSet<(usize, usize)> {
         }
     }
 
-    edge_count
-        .into_iter()
-        .filter(|(_, count)| *count == 1)
-        .map(|(edge, _)| edge)
-        .collect()
+    // Filter boundary edges (can be done in parallel if there are many edges)
+    if parallel && edge_count.len() > 1000 {
+        let edges: Vec<_> = edge_count.into_iter().collect();
+        edges
+            .into_par_iter()
+            .filter(|(_, count)| *count == 1)
+            .map(|(edge, _)| edge)
+            .collect()
+    } else {
+        edge_count
+            .into_iter()
+            .filter(|(_, count)| *count == 1)
+            .map(|(edge, _)| edge)
+            .collect()
+    }
 }
 
 /// Build mapping from edge to face indices.

@@ -107,6 +107,10 @@ enum Commands {
         /// Allow boundary edges to be collapsed
         #[arg(long)]
         collapse_boundary: bool,
+
+        /// Use single-threaded execution (for benchmarking)
+        #[arg(long)]
+        sequential: bool,
     },
 
     /// Remesh to improve triangle quality
@@ -202,8 +206,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             faces,
             ratio,
             collapse_boundary,
+            sequential,
         } => {
-            cmd_decimate(&input, &output, faces, ratio, collapse_boundary)?;
+            cmd_decimate(&input, &output, faces, ratio, collapse_boundary, sequential)?;
         }
 
         Commands::Remesh {
@@ -451,19 +456,23 @@ fn cmd_decimate(
     faces: Option<usize>,
     ratio: f64,
     collapse_boundary: bool,
+    sequential: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
     println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
 
+    let mode = if sequential { "sequential" } else { "parallel" };
     let options = if let Some(target_faces) = faces {
-        println!("Decimating to {} faces...", target_faces);
+        println!("Decimating to {} faces ({})...", target_faces, mode);
         decimate::DecimateOptions::with_target_faces(target_faces)
             .with_preserve_boundary(!collapse_boundary)
+            .with_parallel(!sequential)
     } else {
-        println!("Decimating to {:.0}% of faces...", ratio * 100.0);
+        println!("Decimating to {:.0}% of faces ({})...", ratio * 100.0, mode);
         decimate::DecimateOptions::with_target_ratio(ratio)
             .with_preserve_boundary(!collapse_boundary)
+            .with_parallel(!sequential)
     };
 
     let progress = create_progress();
