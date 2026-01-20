@@ -200,15 +200,18 @@ fn find_boundary_vertices(faces: &[[usize; 3]], n_vertices: usize) -> Vec<usize>
         .collect()
 }
 
-/// Select the two farthest boundary vertices for pinning.
+/// Select two boundary vertices for pinning with UV positions based on 3D geometry.
+///
+/// Instead of always pinning to (0,0) and (1,0), this function computes UV
+/// positions that reflect the 2D extent of the boundary, ensuring the
+/// parameterization spans the UV space well.
 fn select_farthest_boundary_pair(
     vertices: &[Point3<f64>],
     boundary: &[usize],
 ) -> (PinnedVertex, PinnedVertex) {
+    // Find farthest pair - these will be our pins
     let mut max_dist = 0.0;
     let mut best_pair = (boundary[0], boundary[0]);
-
-    // Find farthest pair (O(n²) but boundary is usually small)
     for (i, &v0) in boundary.iter().enumerate() {
         for &v1 in boundary.iter().skip(i + 1) {
             let dist = (vertices[v1] - vertices[v0]).norm_squared();
@@ -219,10 +222,58 @@ fn select_farthest_boundary_pair(
         }
     }
 
-    // Pin to (0, 0) and (1, 0)
+    let p0 = &vertices[best_pair.0];
+    let p1 = &vertices[best_pair.1];
+    let axis = p1 - p0;
+    let axis_len = axis.norm();
+
+    if axis_len < 1e-10 {
+        return (
+            PinnedVertex::new(best_pair.0, 0.0, 0.0),
+            PinnedVertex::new(best_pair.1, 1.0, 0.0),
+        );
+    }
+
+    let axis_dir = axis / axis_len;
+
+    // Find the boundary vertex farthest from the line between p0 and p1
+    // This determines the "height" of the boundary in the perpendicular direction
+    let mut max_perp_dist = 0.0;
+    let mut third_vertex = best_pair.0;
+    for &vi in boundary {
+        let to_v = vertices[vi] - p0;
+        let proj = to_v.dot(&axis_dir);
+        let perp = to_v - proj * axis_dir;
+        let perp_dist = perp.norm();
+        if perp_dist > max_perp_dist {
+            max_perp_dist = perp_dist;
+            third_vertex = vi;
+        }
+    }
+
+    // If boundary has significant perpendicular extent, use the third vertex
+    // to set up pins that span the 2D space
+    if max_perp_dist > 0.1 * axis_len && third_vertex != best_pair.0 && third_vertex != best_pair.1
+    {
+        // Use third_vertex as pin1 instead, with appropriate UV
+        let p_third = &vertices[third_vertex];
+        let to_third = p_third - p0;
+        let u_third = to_third.dot(&axis_dir) / axis_len;
+
+        // V is the perpendicular distance, normalized
+        let v_third = max_perp_dist / axis_len;
+
+        return (
+            PinnedVertex::new(best_pair.0, 0.0, 0.0),
+            PinnedVertex::new(third_vertex, u_third, v_third),
+        );
+    }
+
+    // Boundary is nearly collinear - fall back to standard (0,0) and (1,0)
+    // but with a small V offset for pin1 to avoid degeneracy
     (
         PinnedVertex::new(best_pair.0, 0.0, 0.0),
-        PinnedVertex::new(best_pair.1, 1.0, 0.0),
+        PinnedVertex::new(best_pair.1, 1.0, 0.1),
     )
 }
 
@@ -539,9 +590,34 @@ mod tests {
 
         let (pin0, pin1) = select_farthest_boundary_pair(&vertices, &boundary);
 
-        // Should select vertices 0 and 3 (distance = 2.0)
-        assert!(
-            (pin0.vertex == 0 && pin1.vertex == 3) || (pin0.vertex == 3 && pin1.vertex == 0)
-        );
+        // Pin 0 should be vertex 0 (one end of farthest pair)
+        assert_eq!(pin0.vertex, 0);
+        assert_eq!(pin0.u, 0.0);
+        assert_eq!(pin0.v, 0.0);
+
+        // Pin 1 should be vertex 2 (has perpendicular extent from 0-3 axis)
+        // because it provides better 2D UV coverage than the collinear vertex 3
+        assert_eq!(pin1.vertex, 2);
+        // V should be non-zero (perpendicular distance)
+        assert!(pin1.v > 0.0);
+    }
+
+    #[test]
+    fn test_select_farthest_pair_collinear() {
+        // Test with collinear boundary (no perpendicular extent)
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ];
+        let boundary = vec![0, 1, 2];
+
+        let (pin0, pin1) = select_farthest_boundary_pair(&vertices, &boundary);
+
+        // Should select farthest pair with small V offset
+        assert_eq!(pin0.vertex, 0);
+        assert_eq!(pin1.vertex, 2);
+        assert_eq!(pin1.u, 1.0);
+        assert!((pin1.v - 0.1).abs() < 1e-10); // Small V offset for collinear
     }
 }
