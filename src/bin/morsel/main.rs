@@ -128,6 +128,10 @@ enum Commands {
         /// Number of iterations
         #[arg(short, long, default_value = "5")]
         iterations: usize,
+
+        /// Use single-threaded execution (for benchmarking)
+        #[arg(long)]
+        sequential: bool,
     },
 }
 
@@ -208,8 +212,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             method,
             target_length,
             iterations,
+            sequential,
         } => {
-            cmd_remesh(&input, &output, method, target_length, iterations)?;
+            cmd_remesh(&input, &output, method, target_length, iterations, sequential)?;
         }
     }
 
@@ -480,6 +485,7 @@ fn cmd_remesh(
     method: RemeshMethod,
     target_length: Option<f64>,
     iterations: usize,
+    sequential: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
@@ -491,14 +497,16 @@ fn cmd_remesh(
     println!("Current average edge length: {:.6}", avg_edge);
     println!("Target edge length: {:.6}", target);
 
+    let mode = if sequential { "sequential" } else { "parallel" };
     let progress = create_progress();
 
     let start = Instant::now();
     match method {
         RemeshMethod::Isotropic => {
-            println!("Applying isotropic remeshing ({} iterations)...", iterations);
+            println!("Applying isotropic remeshing ({} iterations, {})...", iterations, mode);
             let options = remesh::RemeshOptions::with_target_length(target)
-                .with_iterations(iterations);
+                .with_iterations(iterations)
+                .with_parallel(!sequential);
             remesh::isotropic_remesh_with_progress(&mut mesh, &options, &progress);
         }
     }

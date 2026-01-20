@@ -68,6 +68,7 @@ pub use isotropic::{
 use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
@@ -523,25 +524,23 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     lambda: f64,
     preserve_boundary: bool,
+    parallel: bool,
 ) {
     let (vertices, faces) = to_face_vertex(mesh);
 
-    let normals = compute_vertex_normals_from_faces(&vertices, &faces);
-    let boundary = compute_boundary_vertices(&faces, vertices.len());
+    let normals = compute_vertex_normals_from_faces(&vertices, &faces, parallel);
+    let boundary = compute_boundary_vertices(&faces, vertices.len(), parallel);
     let neighbors = build_vertex_neighbors(&faces, vertices.len());
 
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(vertices.len());
-
-    for (idx, pos) in vertices.iter().enumerate() {
+    let compute_position = |idx: usize| -> Point3<f64> {
+        let pos = &vertices[idx];
         if preserve_boundary && boundary[idx] {
-            new_positions.push(*pos);
-            continue;
+            return *pos;
         }
 
         let vertex_neighbors = &neighbors[idx];
         if vertex_neighbors.is_empty() {
-            new_positions.push(*pos);
-            continue;
+            return *pos;
         }
 
         let mut centroid = Vector3::zeros();
@@ -554,8 +553,19 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
         let normal = &normals[idx];
         let tangent_displacement = displacement - normal.dot(&displacement) * normal;
 
-        new_positions.push(Point3::from(pos.coords + lambda * tangent_displacement));
-    }
+        Point3::from(pos.coords + lambda * tangent_displacement)
+    };
+
+    let new_positions: Vec<Point3<f64>> = if parallel {
+        (0..vertices.len())
+            .into_par_iter()
+            .map(compute_position)
+            .collect()
+    } else {
+        (0..vertices.len())
+            .map(compute_position)
+            .collect()
+    };
 
     if let Ok(new_mesh) = build_from_triangles::<I>(&new_positions, &faces) {
         *mesh = new_mesh;
@@ -566,47 +576,113 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
 pub(crate) fn compute_vertex_normals_from_faces(
     vertices: &[Point3<f64>],
     faces: &[[usize; 3]],
+    parallel: bool,
 ) -> Vec<Vector3<f64>> {
-    let mut normals: Vec<Vector3<f64>> = vec![Vector3::zeros(); vertices.len()];
-
-    for face in faces {
-        let p0 = &vertices[face[0]];
-        let p1 = &vertices[face[1]];
-        let p2 = &vertices[face[2]];
-
-        let e1 = p1 - p0;
-        let e2 = p2 - p0;
-        let face_normal = e1.cross(&e2);
-
-        normals[face[0]] += face_normal;
-        normals[face[1]] += face_normal;
-        normals[face[2]] += face_normal;
-    }
-
-    for n in &mut normals {
-        let len = n.norm();
-        if len > 1e-10 {
-            *n /= len;
+    if parallel {
+        // Parallel: compute per-vertex by gathering face contributions
+        // First build vertex-to-face mapping
+        let mut vertex_faces: Vec<Vec<usize>> = vec![Vec::new(); vertices.len()];
+        for (face_idx, face) in faces.iter().enumerate() {
+            vertex_faces[face[0]].push(face_idx);
+            vertex_faces[face[1]].push(face_idx);
+            vertex_faces[face[2]].push(face_idx);
         }
-    }
 
-    normals
+        (0..vertices.len())
+            .into_par_iter()
+            .map(|vi| {
+                let mut normal = Vector3::zeros();
+                for &face_idx in &vertex_faces[vi] {
+                    let face = &faces[face_idx];
+                    let p0 = &vertices[face[0]];
+                    let p1 = &vertices[face[1]];
+                    let p2 = &vertices[face[2]];
+                    let e1 = p1 - p0;
+                    let e2 = p2 - p0;
+                    normal += e1.cross(&e2);
+                }
+                let len = normal.norm();
+                if len > 1e-10 {
+                    normal /= len;
+                }
+                normal
+            })
+            .collect()
+    } else {
+        // Sequential: scatter face normals to vertices
+        let mut normals: Vec<Vector3<f64>> = vec![Vector3::zeros(); vertices.len()];
+
+        for face in faces {
+            let p0 = &vertices[face[0]];
+            let p1 = &vertices[face[1]];
+            let p2 = &vertices[face[2]];
+
+            let e1 = p1 - p0;
+            let e2 = p2 - p0;
+            let face_normal = e1.cross(&e2);
+
+            normals[face[0]] += face_normal;
+            normals[face[1]] += face_normal;
+            normals[face[2]] += face_normal;
+        }
+
+        for n in &mut normals {
+            let len = n.norm();
+            if len > 1e-10 {
+                *n /= len;
+            }
+        }
+
+        normals
+    }
 }
 
 /// Compute which vertices are on the boundary.
-pub(crate) fn compute_boundary_vertices(faces: &[[usize; 3]], num_vertices: usize) -> Vec<bool> {
-    let mut boundary = vec![false; num_vertices];
-
-    for v in 0..num_vertices {
-        for &neighbor in &get_vertex_neighbors(faces, v) {
-            if is_boundary_edge_in_faces(faces, v, neighbor) {
-                boundary[v] = true;
-                break;
-            }
+pub(crate) fn compute_boundary_vertices(
+    faces: &[[usize; 3]],
+    num_vertices: usize,
+    parallel: bool,
+) -> Vec<bool> {
+    // Pre-compute edge counts for boundary detection
+    // An edge is boundary if it appears only once in the face list
+    let mut edge_counts: std::collections::HashMap<(usize, usize), usize> =
+        std::collections::HashMap::new();
+    for face in faces {
+        for i in 0..3 {
+            let v0 = face[i];
+            let v1 = face[(i + 1) % 3];
+            let edge = if v0 < v1 { (v0, v1) } else { (v1, v0) };
+            *edge_counts.entry(edge).or_insert(0) += 1;
         }
     }
 
-    boundary
+    // Build neighbor lists for each vertex
+    let neighbors = build_vertex_neighbors(faces, num_vertices);
+
+    let is_boundary_vertex = |v: usize| -> bool {
+        for &neighbor in &neighbors[v] {
+            let edge = if v < neighbor {
+                (v, neighbor)
+            } else {
+                (neighbor, v)
+            };
+            if edge_counts.get(&edge) == Some(&1) {
+                return true;
+            }
+        }
+        false
+    };
+
+    if parallel {
+        (0..num_vertices)
+            .into_par_iter()
+            .map(is_boundary_vertex)
+            .collect()
+    } else {
+        (0..num_vertices)
+            .map(is_boundary_vertex)
+            .collect()
+    }
 }
 
 /// Build adjacency list from faces.

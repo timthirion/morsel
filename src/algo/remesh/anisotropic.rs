@@ -40,6 +40,9 @@ pub struct AnisotropicOptions {
 
     /// Curvature adaptation strength (0.0 = uniform, 1.0 = fully adaptive).
     pub adaptation: f64,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl AnisotropicOptions {
@@ -53,6 +56,7 @@ impl AnisotropicOptions {
             smoothing_iterations: 3,
             smoothing_lambda: 0.5,
             adaptation: 1.0,
+            parallel: true,
         }
     }
 
@@ -77,6 +81,18 @@ impl AnisotropicOptions {
     /// Set the number of smoothing iterations per remeshing iteration.
     pub fn with_smoothing_iterations(mut self, iterations: usize) -> Self {
         self.smoothing_iterations = iterations;
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }
@@ -128,7 +144,7 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
         flip_edges_to_improve_valence(mesh, options.preserve_boundary);
 
         for _ in 0..options.smoothing_iterations {
-            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary);
+            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary, options.parallel);
         }
 
         let _ = sizing;

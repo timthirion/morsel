@@ -30,6 +30,9 @@ pub struct RemeshOptions {
 
     /// Smoothing factor for tangential relaxation.
     pub smoothing_lambda: f64,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl RemeshOptions {
@@ -41,6 +44,7 @@ impl RemeshOptions {
             preserve_boundary: true,
             smoothing_iterations: 3,
             smoothing_lambda: 0.5,
+            parallel: true,
         }
     }
 
@@ -59,6 +63,18 @@ impl RemeshOptions {
     /// Set the number of smoothing iterations per remeshing iteration.
     pub fn with_smoothing_iterations(mut self, iterations: usize) -> Self {
         self.smoothing_iterations = iterations;
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }
@@ -129,7 +145,7 @@ fn isotropic_remesh_internal<I: MeshIndex>(
             p.report(base_step + 3, total_steps, "Smoothing");
         }
         for _ in 0..options.smoothing_iterations {
-            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary);
+            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary, options.parallel);
         }
     }
 
@@ -537,7 +553,7 @@ mod tests {
         flip_edges_to_improve_valence(&mut mesh, true);
         assert!(mesh.is_valid());
 
-        tangential_smooth(&mut mesh, 0.5, true);
+        tangential_smooth(&mut mesh, 0.5, true, true);
         assert!(mesh.is_valid());
     }
 }
