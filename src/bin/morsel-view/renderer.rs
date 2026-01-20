@@ -39,6 +39,10 @@ pub struct Renderer {
     textured_pipeline_culled: wgpu::RenderPipeline,
     textured_wireframe_pipeline: wgpu::RenderPipeline,
     textured_wireframe_pipeline_culled: wgpu::RenderPipeline,
+    colored_pipeline: wgpu::RenderPipeline,
+    colored_pipeline_culled: wgpu::RenderPipeline,
+    colored_wireframe_pipeline: wgpu::RenderPipeline,
+    colored_wireframe_pipeline_culled: wgpu::RenderPipeline,
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -554,6 +558,189 @@ impl Renderer {
                 cache: None,
             });
 
+        // Create vertex-colored pipeline (no culling)
+        let colored_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Colored Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_colored"),
+                buffers: &[Vertex::desc()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_colored"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        // Create vertex-colored pipeline with backface culling
+        let colored_pipeline_culled =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Colored Pipeline (Culled)"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_colored"),
+                    buffers: &[Vertex::desc()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_colored"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
+
+        // Create vertex-colored wireframe pipeline (no culling)
+        let colored_wireframe_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Colored Wireframe Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_colored"),
+                    buffers: &[Vertex::desc()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_colored"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Line,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
+
+        // Create vertex-colored wireframe pipeline with backface culling
+        let colored_wireframe_pipeline_culled =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Colored Wireframe Pipeline (Culled)"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_colored"),
+                    buffers: &[Vertex::desc()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_colored"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Line,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
+
         // Create depth texture
         let depth_texture = Self::create_depth_texture(&device, &config);
 
@@ -571,6 +758,10 @@ impl Renderer {
             textured_pipeline_culled,
             textured_wireframe_pipeline,
             textured_wireframe_pipeline_culled,
+            colored_pipeline,
+            colored_pipeline_culled,
+            colored_wireframe_pipeline,
+            colored_wireframe_pipeline_culled,
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group: None,
@@ -684,6 +875,7 @@ impl Renderer {
         wireframe: bool,
         backface_culling: bool,
         textured: bool,
+        show_colors: bool,
     ) -> Result<(), wgpu::SurfaceError> {
         // Update uniforms
         let view_proj = camera.view_projection_matrix(self.aspect());
@@ -759,7 +951,25 @@ impl Renderer {
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
 
             // Select pipeline based on rendering mode
-            if use_textured && wireframe {
+            // Priority: vertex colors (if enabled) > textures > solid
+            let use_colors = mesh.has_colors && show_colors;
+            if use_colors && wireframe {
+                // Vertex-colored wireframe rendering
+                let pipeline = if backface_culling {
+                    &self.colored_wireframe_pipeline_culled
+                } else {
+                    &self.colored_wireframe_pipeline
+                };
+                render_pass.set_pipeline(pipeline);
+            } else if use_colors {
+                // Vertex-colored solid rendering
+                let pipeline = if backface_culling {
+                    &self.colored_pipeline_culled
+                } else {
+                    &self.colored_pipeline
+                };
+                render_pass.set_pipeline(pipeline);
+            } else if use_textured && wireframe {
                 // Textured wireframe rendering
                 let pipeline = if backface_culling {
                     &self.textured_wireframe_pipeline_culled
@@ -848,11 +1058,12 @@ var diffuse_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var diffuse_sampler: sampler;
 
-// Vertex input with position, normal, and UV
+// Vertex input with position, normal, UV, and color
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) color: vec3<f32>,
 }
 
 // Output for solid/wireframe shaders (no UV needed)
@@ -866,6 +1077,13 @@ struct TexturedVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+}
+
+// Output for vertex-colored shader
+struct ColoredVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_normal: vec3<f32>,
+    @location(1) vertex_color: vec3<f32>,
 }
 
 @vertex
@@ -882,6 +1100,15 @@ fn vs_textured(in: VertexInput) -> TexturedVertexOutput {
     out.clip_position = uniforms.view_proj * vec4<f32>(in.position, 1.0);
     out.world_normal = in.normal;
     out.uv = in.uv;
+    return out;
+}
+
+@vertex
+fn vs_colored(in: VertexInput) -> ColoredVertexOutput {
+    var out: ColoredVertexOutput;
+    out.clip_position = uniforms.view_proj * vec4<f32>(in.position, 1.0);
+    out.world_normal = in.normal;
+    out.vertex_color = in.color;
     return out;
 }
 
@@ -928,6 +1155,21 @@ fn fs_textured(in: TexturedVertexOutput) -> @location(0) vec4<f32> {
     let diffuse = max(abs(ndotl), 0.0) * 0.7;
 
     let color = tex_color.rgb * (ambient + diffuse);
+    return vec4<f32>(color, 1.0);
+}
+
+@fragment
+fn fs_colored(in: ColoredVertexOutput) -> @location(0) vec4<f32> {
+    // Apply lighting for 3D depth perception while preserving vertex colors
+    let normal = normalize(in.world_normal);
+    let light_dir = normalize(uniforms.light_dir);
+
+    // Two-sided lighting
+    let ambient = 0.5;
+    let ndotl = dot(normal, light_dir);
+    let diffuse = abs(ndotl) * 0.5;
+
+    let color = in.vertex_color * (ambient + diffuse);
     return vec4<f32>(color, 1.0);
 }
 "#;
