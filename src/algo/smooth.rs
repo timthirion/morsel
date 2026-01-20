@@ -32,6 +32,7 @@
 //! ```
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::mesh::{HalfEdgeId, HalfEdgeMesh, MeshIndex, VertexId};
 
@@ -49,6 +50,9 @@ pub struct SmoothOptions {
 
     /// Whether to preserve boundary vertices (don't move them).
     pub preserve_boundary: bool,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl Default for SmoothOptions {
@@ -57,6 +61,7 @@ impl Default for SmoothOptions {
             iterations: 1,
             lambda: 0.5,
             preserve_boundary: true,
+            parallel: true,
         }
     }
 }
@@ -77,6 +82,18 @@ impl SmoothOptions {
     /// Create options that allow boundary vertices to move.
     pub fn allow_boundary_movement(mut self) -> Self {
         self.preserve_boundary = false;
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }
@@ -118,7 +135,7 @@ impl SmoothOptions {
 ///     .with_lambda(0.3);
 /// laplacian_smooth(&mut mesh, &options);
 /// ```
-pub fn laplacian_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
+pub fn laplacian_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
     if options.iterations == 0 || options.lambda == 0.0 {
         return;
     }
@@ -132,25 +149,37 @@ pub fn laplacian_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Smoo
         vec![false; mesh.num_vertices()]
     };
 
-    // Temporary storage for new positions
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
 
     for _ in 0..options.iterations {
-        new_positions.clear();
-
         // Compute new positions for all vertices
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                // Keep boundary vertices fixed
-                new_positions.push(*mesh.position(vid));
-            } else {
-                let new_pos = compute_laplacian_step(mesh, vid, options.lambda);
-                new_positions.push(new_pos);
-            }
-        }
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        };
 
         // Apply new positions
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }
@@ -202,7 +231,7 @@ pub fn laplacian_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Smoo
 ///     .with_lambda(0.5);
 /// taubin_smooth(&mut mesh, &options);
 /// ```
-pub fn taubin_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
+pub fn taubin_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
     if options.iterations == 0 || options.lambda == 0.0 {
         return;
     }
@@ -221,15 +250,12 @@ pub fn taubin_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothO
         vec![false; mesh.num_vertices()]
     };
 
-    // Temporary storage for new positions
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
-
     for _ in 0..options.iterations {
         // Positive smoothing step (λ)
-        apply_laplacian_step(mesh, &boundary_vertices, options.lambda, &mut new_positions);
+        apply_laplacian_step_impl(mesh, &boundary_vertices, options.lambda, options.parallel);
 
         // Negative inflation step (μ)
-        apply_laplacian_step(mesh, &boundary_vertices, mu, &mut new_positions);
+        apply_laplacian_step_impl(mesh, &boundary_vertices, mu, options.parallel);
     }
 }
 
@@ -249,7 +275,7 @@ pub fn taubin_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothO
 /// Cotangent weights can become negative for obtuse triangles, which may
 /// cause instability. Consider using [`laplacian_smooth`] for meshes with
 /// poor triangle quality.
-pub fn cotangent_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
+pub fn cotangent_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &SmoothOptions) {
     if options.iterations == 0 || options.lambda == 0.0 {
         return;
     }
@@ -263,24 +289,37 @@ pub fn cotangent_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Smoo
         vec![false; mesh.num_vertices()]
     };
 
-    // Temporary storage for new positions
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
 
     for _ in 0..options.iterations {
-        new_positions.clear();
-
         // Compute new positions for all vertices
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                new_positions.push(*mesh.position(vid));
-            } else {
-                let new_pos = compute_cotangent_laplacian_step(mesh, vid, options.lambda);
-                new_positions.push(new_pos);
-            }
-        }
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_cotangent_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_cotangent_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        };
 
         // Apply new positions
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }
@@ -303,6 +342,9 @@ pub struct BilateralOptions {
 
     /// Whether to preserve boundary vertices.
     pub preserve_boundary: bool,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl Default for BilateralOptions {
@@ -312,6 +354,7 @@ impl Default for BilateralOptions {
             sigma_c: 1.0,
             sigma_s: 0.5,
             preserve_boundary: true,
+            parallel: true,
         }
     }
 }
@@ -332,6 +375,18 @@ impl BilateralOptions {
     /// Set the normal weight parameter.
     pub fn with_sigma_s(mut self, sigma_s: f64) -> Self {
         self.sigma_s = sigma_s.max(0.01);
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }
@@ -363,7 +418,7 @@ impl BilateralOptions {
 ///
 /// Fleishman, S., Drori, I., & Cohen-Or, D. (2003). "Bilateral mesh denoising."
 /// ACM SIGGRAPH 2003.
-pub fn bilateral_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &BilateralOptions) {
+pub fn bilateral_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &BilateralOptions) {
     if options.iterations == 0 {
         return;
     }
@@ -379,53 +434,90 @@ pub fn bilateral_smooth<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Bila
 
     let sigma_c_sq = options.sigma_c * options.sigma_c;
     let sigma_s_sq = options.sigma_s * options.sigma_s;
-
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
 
     for _ in 0..options.iterations {
         // Compute vertex normals for this iteration
         let normals = compute_vertex_normals(mesh);
 
-        new_positions.clear();
+        // Compute new positions
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        return *mesh.position(vid);
+                    }
 
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                new_positions.push(*mesh.position(vid));
-                continue;
-            }
+                    let pos = mesh.position(vid);
+                    let normal = &normals[i];
 
-            let pos = mesh.position(vid);
-            let normal = &normals[vid.index()];
+                    let mut weighted_sum = Vector3::zeros();
+                    let mut weight_total = 0.0;
 
-            let mut weighted_sum = Vector3::zeros();
-            let mut weight_total = 0.0;
+                    for neighbor_id in mesh.vertex_neighbors(vid) {
+                        let neighbor_pos = mesh.position(neighbor_id);
+                        let neighbor_normal = &normals[neighbor_id.index()];
 
-            for neighbor_id in mesh.vertex_neighbors(vid) {
-                let neighbor_pos = mesh.position(neighbor_id);
-                let neighbor_normal = &normals[neighbor_id.index()];
+                        let dist_sq = (neighbor_pos - pos).norm_squared();
+                        let w_c = (-dist_sq / (2.0 * sigma_c_sq)).exp();
 
-                // Spatial weight (based on distance)
-                let dist_sq = (neighbor_pos - pos).norm_squared();
-                let w_c = (-dist_sq / (2.0 * sigma_c_sq)).exp();
+                        let normal_diff_sq = (neighbor_normal - normal).norm_squared();
+                        let w_s = (-normal_diff_sq / (2.0 * sigma_s_sq)).exp();
 
-                // Normal weight (based on normal difference)
-                let normal_diff_sq = (neighbor_normal - normal).norm_squared();
-                let w_s = (-normal_diff_sq / (2.0 * sigma_s_sq)).exp();
+                        let weight = w_c * w_s;
+                        weighted_sum += weight * (neighbor_pos - pos);
+                        weight_total += weight;
+                    }
 
-                let weight = w_c * w_s;
-                weighted_sum += weight * (neighbor_pos - pos);
-                weight_total += weight;
-            }
+                    if weight_total > 1e-10 {
+                        Point3::from(pos.coords + weighted_sum / weight_total)
+                    } else {
+                        *pos
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        return *mesh.position(vid);
+                    }
 
-            if weight_total > 1e-10 {
-                new_positions.push(Point3::from(pos.coords + weighted_sum / weight_total));
-            } else {
-                new_positions.push(*pos);
-            }
-        }
+                    let pos = mesh.position(vid);
+                    let normal = &normals[i];
+
+                    let mut weighted_sum = Vector3::zeros();
+                    let mut weight_total = 0.0;
+
+                    for neighbor_id in mesh.vertex_neighbors(vid) {
+                        let neighbor_pos = mesh.position(neighbor_id);
+                        let neighbor_normal = &normals[neighbor_id.index()];
+
+                        let dist_sq = (neighbor_pos - pos).norm_squared();
+                        let w_c = (-dist_sq / (2.0 * sigma_c_sq)).exp();
+
+                        let normal_diff_sq = (neighbor_normal - normal).norm_squared();
+                        let w_s = (-normal_diff_sq / (2.0 * sigma_s_sq)).exp();
+
+                        let weight = w_c * w_s;
+                        weighted_sum += weight * (neighbor_pos - pos);
+                        weight_total += weight;
+                    }
+
+                    if weight_total > 1e-10 {
+                        Point3::from(pos.coords + weighted_sum / weight_total)
+                    } else {
+                        *pos
+                    }
+                })
+                .collect()
+        };
 
         // Apply new positions
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }
@@ -446,6 +538,9 @@ pub struct CurvatureFlowOptions {
 
     /// Whether to use implicit integration (more stable for larger time steps).
     pub implicit: bool,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl Default for CurvatureFlowOptions {
@@ -455,6 +550,7 @@ impl Default for CurvatureFlowOptions {
             time_step: 0.001,
             preserve_boundary: true,
             implicit: false,
+            parallel: true,
         }
     }
 }
@@ -469,6 +565,18 @@ impl CurvatureFlowOptions {
     /// Set the time step.
     pub fn with_time_step(mut self, time_step: f64) -> Self {
         self.time_step = time_step.max(1e-6);
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }
@@ -505,7 +613,7 @@ impl CurvatureFlowOptions {
 ///
 /// Desbrun, M., et al. (1999). "Implicit fairing of irregular meshes using
 /// diffusion and curvature flow." SIGGRAPH 99.
-pub fn mean_curvature_flow<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CurvatureFlowOptions) {
+pub fn mean_curvature_flow<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &CurvatureFlowOptions) {
     if options.iterations == 0 {
         return;
     }
@@ -519,33 +627,54 @@ pub fn mean_curvature_flow<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &C
         vec![false; mesh.num_vertices()]
     };
 
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
+    let time_step = options.time_step;
 
     for _ in 0..options.iterations {
-        new_positions.clear();
+        // Compute new positions
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        return *mesh.position(vid);
+                    }
 
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                new_positions.push(*mesh.position(vid));
-                continue;
-            }
+                    let pos = *mesh.position(vid);
+                    let (curvature_vector, area) = compute_mean_curvature_vector(mesh, vid);
 
-            let pos = *mesh.position(vid);
+                    if area > 1e-10 {
+                        let displacement = time_step * curvature_vector;
+                        Point3::from(pos.coords + displacement)
+                    } else {
+                        pos
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        return *mesh.position(vid);
+                    }
 
-            // Compute mean curvature vector using cotangent weights
-            let (curvature_vector, area) = compute_mean_curvature_vector(mesh, vid);
+                    let pos = *mesh.position(vid);
+                    let (curvature_vector, area) = compute_mean_curvature_vector(mesh, vid);
 
-            if area > 1e-10 {
-                // Move in direction of mean curvature
-                let displacement = options.time_step * curvature_vector;
-                new_positions.push(Point3::from(pos.coords + displacement));
-            } else {
-                new_positions.push(pos);
-            }
-        }
+                    if area > 1e-10 {
+                        let displacement = time_step * curvature_vector;
+                        Point3::from(pos.coords + displacement)
+                    } else {
+                        pos
+                    }
+                })
+                .collect()
+        };
 
         // Apply new positions
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }
@@ -743,26 +872,42 @@ fn cotangent_angle(a: &Point3<f64>, b: &Point3<f64>, c: &Point3<f64>) -> f64 {
 }
 
 /// Apply a single Laplacian step to all vertices.
-fn apply_laplacian_step<I: MeshIndex>(
+fn apply_laplacian_step_impl<I: MeshIndex + Sync>(
     mesh: &mut HalfEdgeMesh<I>,
     boundary_vertices: &[bool],
     lambda: f64,
-    new_positions: &mut Vec<Point3<f64>>,
+    parallel: bool,
 ) {
-    new_positions.clear();
+    let num_vertices = mesh.num_vertices();
 
     // Compute new positions
-    for vid in mesh.vertex_ids() {
-        if boundary_vertices[vid.index()] {
-            new_positions.push(*mesh.position(vid));
-        } else {
-            let new_pos = compute_laplacian_step(mesh, vid, lambda);
-            new_positions.push(new_pos);
-        }
-    }
+    let new_positions: Vec<Point3<f64>> = if parallel {
+        (0..num_vertices)
+            .into_par_iter()
+            .map(|i| {
+                let vid = VertexId::new(i);
+                if boundary_vertices[i] {
+                    *mesh.position(vid)
+                } else {
+                    compute_laplacian_step(mesh, vid, lambda)
+                }
+            })
+            .collect()
+    } else {
+        (0..num_vertices)
+            .map(|i| {
+                let vid = VertexId::new(i);
+                if boundary_vertices[i] {
+                    *mesh.position(vid)
+                } else {
+                    compute_laplacian_step(mesh, vid, lambda)
+                }
+            })
+            .collect()
+    };
 
     // Apply new positions
-    for i in 0..mesh.num_vertices() {
+    for i in 0..num_vertices {
         let vid = VertexId::new(i);
         mesh.set_position(vid, new_positions[i]);
     }
@@ -773,7 +918,7 @@ fn apply_laplacian_step<I: MeshIndex>(
 // ============================================================================
 
 /// Laplacian smoothing with progress reporting.
-pub fn laplacian_smooth_with_progress<I: MeshIndex>(
+pub fn laplacian_smooth_with_progress<I: MeshIndex + Sync>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SmoothOptions,
     progress: &Progress,
@@ -790,22 +935,38 @@ pub fn laplacian_smooth_with_progress<I: MeshIndex>(
         vec![false; mesh.num_vertices()]
     };
 
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
 
     for iter in 0..options.iterations {
         progress.report(iter, options.iterations, "Laplacian smoothing");
 
-        new_positions.clear();
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                new_positions.push(*mesh.position(vid));
-            } else {
-                let new_pos = compute_laplacian_step(mesh, vid, options.lambda);
-                new_positions.push(new_pos);
-            }
-        }
+        // Compute new positions
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        };
 
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }
@@ -814,7 +975,7 @@ pub fn laplacian_smooth_with_progress<I: MeshIndex>(
 }
 
 /// Taubin smoothing with progress reporting.
-pub fn taubin_smooth_with_progress<I: MeshIndex>(
+pub fn taubin_smooth_with_progress<I: MeshIndex + Sync>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SmoothOptions,
     progress: &Progress,
@@ -834,21 +995,19 @@ pub fn taubin_smooth_with_progress<I: MeshIndex>(
         vec![false; mesh.num_vertices()]
     };
 
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
-
     for iter in 0..options.iterations {
         progress.report(iter, options.iterations, "Taubin smoothing");
 
         // Positive step (smoothing)
-        apply_laplacian_step(mesh, &boundary_vertices, options.lambda, &mut new_positions);
+        apply_laplacian_step_impl(mesh, &boundary_vertices, options.lambda, options.parallel);
         // Negative step (inflation)
-        apply_laplacian_step(mesh, &boundary_vertices, mu, &mut new_positions);
+        apply_laplacian_step_impl(mesh, &boundary_vertices, mu, options.parallel);
     }
     progress.report(options.iterations, options.iterations, "Taubin smoothing");
 }
 
 /// Cotangent smoothing with progress reporting.
-pub fn cotangent_smooth_with_progress<I: MeshIndex>(
+pub fn cotangent_smooth_with_progress<I: MeshIndex + Sync>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SmoothOptions,
     progress: &Progress,
@@ -865,22 +1024,38 @@ pub fn cotangent_smooth_with_progress<I: MeshIndex>(
         vec![false; mesh.num_vertices()]
     };
 
-    let mut new_positions: Vec<Point3<f64>> = Vec::with_capacity(mesh.num_vertices());
+    let num_vertices = mesh.num_vertices();
 
     for iter in 0..options.iterations {
         progress.report(iter, options.iterations, "Cotangent smoothing");
 
-        new_positions.clear();
-        for vid in mesh.vertex_ids() {
-            if boundary_vertices[vid.index()] {
-                new_positions.push(*mesh.position(vid));
-            } else {
-                let new_pos = compute_cotangent_laplacian_step(mesh, vid, options.lambda);
-                new_positions.push(new_pos);
-            }
-        }
+        // Compute new positions
+        let new_positions: Vec<Point3<f64>> = if options.parallel {
+            (0..num_vertices)
+                .into_par_iter()
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_cotangent_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        } else {
+            (0..num_vertices)
+                .map(|i| {
+                    let vid = VertexId::new(i);
+                    if boundary_vertices[i] {
+                        *mesh.position(vid)
+                    } else {
+                        compute_cotangent_laplacian_step(mesh, vid, options.lambda)
+                    }
+                })
+                .collect()
+        };
 
-        for i in 0..mesh.num_vertices() {
+        for i in 0..num_vertices {
             let vid = VertexId::new(i);
             mesh.set_position(vid, new_positions[i]);
         }

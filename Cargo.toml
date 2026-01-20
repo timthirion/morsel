@@ -10,6 +10,9 @@ keywords = ["mesh", "geometry", "half-edge", "computational-geometry", "3d"]
 categories = ["algorithms", "graphics", "mathematics", "science"]
 
 [dependencies]
+# Parallelism
+rayon = "1.10"
+
 # Linear algebra
 nalgebra = "0.33"
 

@@ -61,6 +61,10 @@ enum Commands {
         /// Allow boundary vertices to move
         #[arg(long)]
         move_boundary: bool,
+
+        /// Use single-threaded execution (for benchmarking)
+        #[arg(long)]
+        sequential: bool,
     },
 
     /// Subdivide a mesh
@@ -169,8 +173,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             iterations,
             lambda,
             move_boundary,
+            sequential,
         } => {
-            cmd_smooth(&input, &output, method, iterations, lambda, move_boundary)?;
+            cmd_smooth(&input, &output, method, iterations, lambda, move_boundary, sequential)?;
         }
 
         Commands::Subdivide {
@@ -208,22 +213,41 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Create a progress reporter that displays a progress bar on the terminal.
 fn create_progress() -> Progress {
-    let last_percent = Arc::new(AtomicUsize::new(101)); // Start at invalid value to force first update
+    let max_percent = Arc::new(AtomicUsize::new(0)); // Track highest percent seen (monotonic)
 
     Progress::new(move |current, total, message| {
         if total == 0 {
             return;
         }
 
-        let percent = if current >= total {
+        // Use rounding instead of truncation for smoother progress
+        let raw_percent = if current >= total {
             100
         } else {
-            (current * 100) / total
+            ((current * 100) + (total / 2)) / total
         };
 
-        // Only update if percent changed (reduce flickering)
-        let old_percent = last_percent.swap(percent, Ordering::Relaxed);
-        if percent == old_percent && percent != 100 {
+        // Ensure monotonic progress: only increase, never decrease
+        // This prevents bouncing when sub-tasks transition or estimates change
+        let (percent, increased) = loop {
+            let old_max = max_percent.load(Ordering::Relaxed);
+            let new_max = old_max.max(raw_percent);
+            if new_max == old_max {
+                break (old_max, false);
+            }
+            match max_percent.compare_exchange_weak(
+                old_max,
+                new_max,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break (new_max, true),
+                Err(_) => continue,
+            }
+        };
+
+        // Only update display if percent increased (reduce flickering)
+        if !increased && percent != 100 {
             return;
         }
 
@@ -337,6 +361,7 @@ fn cmd_smooth(
     iterations: usize,
     lambda: f64,
     move_boundary: bool,
+    sequential: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
@@ -346,22 +371,24 @@ fn cmd_smooth(
         iterations,
         lambda,
         preserve_boundary: !move_boundary,
+        parallel: !sequential,
     };
 
+    let mode = if sequential { "sequential" } else { "parallel" };
     let progress = create_progress();
 
     let start = Instant::now();
     match method {
         SmoothMethod::Laplacian => {
-            println!("Applying Laplacian smoothing ({} iterations, lambda={})...", iterations, lambda);
+            println!("Applying Laplacian smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
             smooth::laplacian_smooth_with_progress(&mut mesh, &options, &progress);
         }
         SmoothMethod::Taubin => {
-            println!("Applying Taubin smoothing ({} iterations, lambda={})...", iterations, lambda);
+            println!("Applying Taubin smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
             smooth::taubin_smooth_with_progress(&mut mesh, &options, &progress);
         }
         SmoothMethod::Cotangent => {
-            println!("Applying cotangent smoothing ({} iterations, lambda={})...", iterations, lambda);
+            println!("Applying cotangent smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
             smooth::cotangent_smooth_with_progress(&mut mesh, &options, &progress);
         }
     }
