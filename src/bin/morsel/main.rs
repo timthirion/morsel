@@ -82,6 +82,10 @@ enum Commands {
         /// Number of subdivision iterations
         #[arg(short, long, default_value = "1")]
         iterations: usize,
+
+        /// Use single-threaded execution (for benchmarking)
+        #[arg(long)]
+        sequential: bool,
     },
 
     /// Decimate (simplify) a mesh
@@ -183,8 +187,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             method,
             iterations,
+            sequential,
         } => {
-            cmd_subdivide(&input, &output, method, iterations)?;
+            cmd_subdivide(&input, &output, method, iterations, sequential)?;
         }
 
         Commands::Decimate {
@@ -405,22 +410,24 @@ fn cmd_subdivide(
     output: &PathBuf,
     method: SubdivideMethod,
     iterations: usize,
+    sequential: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
     println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
 
-    let options = subdivide::SubdivideOptions::new(iterations);
+    let options = subdivide::SubdivideOptions::new(iterations).with_parallel(!sequential);
+    let mode = if sequential { "sequential" } else { "parallel" };
     let progress = create_progress();
 
     let start = Instant::now();
     match method {
         SubdivideMethod::Loop => {
-            println!("Applying Loop subdivision ({} iterations)...", iterations);
+            println!("Applying Loop subdivision ({} iterations, {})...", iterations, mode);
             subdivide::loop_subdivide_with_progress(&mut mesh, &options, &progress);
         }
         SubdivideMethod::CatmullClark => {
-            println!("Applying Catmull-Clark subdivision ({} iterations)...", iterations);
+            println!("Applying Catmull-Clark subdivision ({} iterations, {})...", iterations, mode);
             subdivide::catmull_clark_subdivide_with_progress(&mut mesh, &options, &progress);
         }
     }

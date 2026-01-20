@@ -62,6 +62,9 @@ pub struct SubdivideOptions {
     /// Whether to preserve sharp boundary edges.
     /// If true, boundary edges use simpler linear interpolation.
     pub preserve_boundary: bool,
+
+    /// Whether to use parallel execution (default: true).
+    pub parallel: bool,
 }
 
 impl SubdivideOptions {
@@ -70,12 +73,25 @@ impl SubdivideOptions {
         Self {
             iterations,
             preserve_boundary: true,
+            parallel: true,
         }
     }
 
     /// Set whether to preserve boundary edges.
     pub fn with_preserve_boundary(mut self, preserve: bool) -> Self {
         self.preserve_boundary = preserve;
+        self
+    }
+
+    /// Set whether to use parallel execution.
+    pub fn with_parallel(mut self, parallel: bool) -> Self {
+        self.parallel = parallel;
+        self
+    }
+
+    /// Create options for single-threaded execution.
+    pub fn sequential(mut self) -> Self {
+        self.parallel = false;
         self
     }
 }

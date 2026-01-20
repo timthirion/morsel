@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::algo::Progress;
 use crate::mesh::{build_from_quads, to_face_vertex_quads, HalfEdgeMesh, MeshIndex};
@@ -42,7 +43,7 @@ pub fn catmull_clark_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options
     }
 
     for _ in 0..options.iterations {
-        catmull_clark_subdivide_once(mesh, options.preserve_boundary);
+        catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
 }
 
@@ -58,31 +59,41 @@ pub fn catmull_clark_subdivide_with_progress<I: MeshIndex>(
 
     for iter in 0..options.iterations {
         progress.report(iter, options.iterations, "Catmull-Clark subdivision");
-        catmull_clark_subdivide_once(mesh, options.preserve_boundary);
+        catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
     progress.report(options.iterations, options.iterations, "Catmull-Clark subdivision");
 }
 
 /// Perform one iteration of Catmull-Clark subdivision.
-fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool) {
+fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool, parallel: bool) {
     let (vertices, faces) = to_face_vertex_quads(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
         return;
     }
 
-    // Step 1: Compute face points (centroids)
-    let face_points: Vec<Point3<f64>> = faces
-        .iter()
-        .map(|face| {
-            let sum: Vector3<f64> = face.iter().map(|&vi| vertices[vi].coords).sum();
-            Point3::from(sum / 4.0)
-        })
-        .collect();
+    // Step 1: Compute face points (centroids) - parallel
+    let face_points: Vec<Point3<f64>> = if parallel {
+        faces
+            .par_iter()
+            .map(|face| {
+                let sum: Vector3<f64> = face.iter().map(|&vi| vertices[vi].coords).sum();
+                Point3::from(sum / 4.0)
+            })
+            .collect()
+    } else {
+        faces
+            .iter()
+            .map(|face| {
+                let sum: Vector3<f64> = face.iter().map(|&vi| vertices[vi].coords).sum();
+                Point3::from(sum / 4.0)
+            })
+            .collect()
+    };
 
     // Step 2: Build edge information and compute edge points
     let edge_info = build_quad_edge_info(&faces);
-    let edge_points = compute_cc_edge_points(&vertices, &face_points, &edge_info, preserve_boundary);
+    let edge_points = compute_cc_edge_points(&vertices, &face_points, &edge_info, preserve_boundary, parallel);
 
     // Step 3: Compute updated vertex positions
     let updated_vertices = compute_cc_vertex_points(
@@ -91,11 +102,12 @@ fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preser
         &face_points,
         &edge_info,
         preserve_boundary,
+        parallel,
     );
 
     // Step 4: Build the subdivided quad mesh
     let (new_vertices, new_faces) =
-        build_cc_subdivided_mesh(&updated_vertices, &face_points, &edge_points, &faces, &edge_info);
+        build_cc_subdivided_mesh(&updated_vertices, &face_points, &edge_points, &faces, &edge_info, parallel);
 
     // Rebuild the half-edge mesh
     if let Ok(new_mesh) = build_from_quads::<I>(&new_vertices, &new_faces) {
@@ -151,32 +163,43 @@ fn compute_cc_edge_points(
     face_points: &[Point3<f64>],
     edge_info: &HashMap<(usize, usize), QuadEdgeInfo>,
     preserve_boundary: bool,
+    parallel: bool,
 ) -> Vec<Point3<f64>> {
-    let mut edge_points = vec![Point3::origin(); edge_info.len()];
+    // Collect edges into a vec for indexed access
+    let edges: Vec<_> = edge_info.iter().collect();
+    let num_edges = edges.len();
 
-    for (&(v0, v1), info) in edge_info {
+    let compute_edge = |idx: usize| -> (usize, Point3<f64>) {
+        let (&(v0, v1), info) = edges[idx];
         let p0 = &vertices[v0];
         let p1 = &vertices[v1];
         let midpoint = (p0.coords + p1.coords) * 0.5;
 
         let new_pos = if info.faces.1.is_none() {
-            // Boundary edge
-            if preserve_boundary {
-                // Sharp boundary: just use midpoint
-                Point3::from(midpoint)
-            } else {
-                Point3::from(midpoint)
-            }
+            // Boundary edge: just use midpoint
+            Point3::from(midpoint)
         } else {
             // Interior edge: average of midpoint and two face points
             let fp1 = &face_points[info.faces.0];
             let fp2 = &face_points[info.faces.1.unwrap()];
             Point3::from((midpoint + fp1.coords + fp2.coords) / 3.0)
         };
+        (info.new_vertex_index, new_pos)
+    };
 
-        edge_points[info.new_vertex_index] = new_pos;
+    let results: Vec<_> = if parallel {
+        (0..num_edges).into_par_iter().map(compute_edge).collect()
+    } else {
+        (0..num_edges).map(compute_edge).collect()
+    };
+
+    // Build result vector
+    let mut edge_points = vec![Point3::origin(); num_edges];
+    for (idx, pos) in results {
+        edge_points[idx] = pos;
     }
 
+    let _ = preserve_boundary; // Kept for API compatibility
     edge_points
 }
 
@@ -187,15 +210,15 @@ fn compute_cc_vertex_points(
     face_points: &[Point3<f64>],
     edge_info: &HashMap<(usize, usize), QuadEdgeInfo>,
     preserve_boundary: bool,
+    parallel: bool,
 ) -> Vec<Point3<f64>> {
     let n = vertices.len();
 
-    // Build vertex-to-faces and vertex-to-edges adjacency
+    // Build vertex-to-faces and vertex-to-edges adjacency (sequential)
     let mut vertex_faces: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut vertex_edges: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
     let mut boundary_neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
 
-    // Collect adjacent faces for each vertex
     for (face_idx, face) in faces.iter().enumerate() {
         for &vi in face {
             if !vertex_faces[vi].contains(&face_idx) {
@@ -204,13 +227,11 @@ fn compute_cc_vertex_points(
         }
     }
 
-    // Collect adjacent edges for each vertex and identify boundary edges
     for (&(v0, v1), info) in edge_info {
         vertex_edges[v0].push((v0, v1));
         vertex_edges[v1].push((v0, v1));
 
         if info.faces.1.is_none() {
-            // Boundary edge
             if !boundary_neighbors[v0].contains(&v1) {
                 boundary_neighbors[v0].push(v1);
             }
@@ -220,55 +241,48 @@ fn compute_cc_vertex_points(
         }
     }
 
-    let mut updated = Vec::with_capacity(n);
-
-    for (i, pos) in vertices.iter().enumerate() {
+    // Compute vertex positions
+    let compute_vertex = |i: usize| -> Point3<f64> {
+        let pos = &vertices[i];
         let is_boundary = !boundary_neighbors[i].is_empty();
 
-        let new_pos = if is_boundary && preserve_boundary {
-            // Boundary vertex rule
+        if is_boundary && preserve_boundary {
             if boundary_neighbors[i].len() == 2 {
-                // Regular boundary vertex: 1/8 * (left + right) + 3/4 * v
                 let left = &vertices[boundary_neighbors[i][0]];
                 let right = &vertices[boundary_neighbors[i][1]];
                 Point3::from((left.coords + right.coords) * (1.0 / 8.0) + pos.coords * (3.0 / 4.0))
             } else {
-                // Corner: keep position
                 *pos
             }
         } else {
-            // Interior vertex: (Q + 2R + (n-3)S) / n
             let valence = vertex_faces[i].len();
             if valence == 0 {
                 *pos
             } else {
-                // Q = average of adjacent face points
                 let q: Vector3<f64> = vertex_faces[i]
                     .iter()
                     .map(|&fi| face_points[fi].coords)
                     .sum::<Vector3<f64>>()
                     / valence as f64;
 
-                // R = average of adjacent edge midpoints
                 let r: Vector3<f64> = vertex_edges[i]
                     .iter()
                     .map(|&(v0, v1)| (vertices[v0].coords + vertices[v1].coords) * 0.5)
                     .sum::<Vector3<f64>>()
                     / vertex_edges[i].len() as f64;
 
-                // S = original position
                 let s = pos.coords;
-
-                // New position: (Q + 2R + (n-3)S) / n
                 let n_f = valence as f64;
                 Point3::from((q + r * 2.0 + s * (n_f - 3.0)) / n_f)
             }
-        };
+        }
+    };
 
-        updated.push(new_pos);
+    if parallel {
+        (0..n).into_par_iter().map(compute_vertex).collect()
+    } else {
+        (0..n).map(compute_vertex).collect()
     }
-
-    updated
 }
 
 /// Build the subdivided quad mesh with new connectivity.
@@ -278,6 +292,7 @@ fn build_cc_subdivided_mesh(
     edge_points: &[Point3<f64>],
     original_faces: &[[usize; 4]],
     edge_info: &HashMap<(usize, usize), QuadEdgeInfo>,
+    parallel: bool,
 ) -> (Vec<Point3<f64>>, Vec<[usize; 4]>) {
     let num_original = updated_vertices.len();
     let num_face_points = face_points.len();
@@ -298,33 +313,39 @@ fn build_cc_subdivided_mesh(
     };
 
     // Build new faces: each original quad becomes 4 quads
-    let mut new_faces: Vec<[usize; 4]> = Vec::with_capacity(original_faces.len() * 4);
-
-    for (face_idx, face) in original_faces.iter().enumerate() {
+    let build_face_set = |face_idx: usize| -> [[usize; 4]; 4] {
+        let face = &original_faces[face_idx];
         let v0 = face[0];
         let v1 = face[1];
         let v2 = face[2];
         let v3 = face[3];
 
-        // Face point
         let fp = get_face_point(face_idx);
-
-        // Edge points
         let e01 = get_edge_point(v0, v1);
         let e12 = get_edge_point(v1, v2);
         let e23 = get_edge_point(v2, v3);
         let e30 = get_edge_point(v3, v0);
 
-        // Four new quads (counter-clockwise winding):
-        // 1. Quad at corner v0: v0 -> e01 -> fp -> e30
-        new_faces.push([v0, e01, fp, e30]);
-        // 2. Quad at corner v1: v1 -> e12 -> fp -> e01
-        new_faces.push([v1, e12, fp, e01]);
-        // 3. Quad at corner v2: v2 -> e23 -> fp -> e12
-        new_faces.push([v2, e23, fp, e12]);
-        // 4. Quad at corner v3: v3 -> e30 -> fp -> e23
-        new_faces.push([v3, e30, fp, e23]);
-    }
+        [
+            [v0, e01, fp, e30],
+            [v1, e12, fp, e01],
+            [v2, e23, fp, e12],
+            [v3, e30, fp, e23],
+        ]
+    };
+
+    let face_sets: Vec<_> = if parallel {
+        (0..original_faces.len())
+            .into_par_iter()
+            .map(build_face_set)
+            .collect()
+    } else {
+        (0..original_faces.len())
+            .map(build_face_set)
+            .collect()
+    };
+
+    let new_faces: Vec<[usize; 4]> = face_sets.into_iter().flatten().collect();
 
     (new_vertices, new_faces)
 }

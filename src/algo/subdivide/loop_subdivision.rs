@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
@@ -39,7 +40,7 @@ pub fn loop_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &Subdiv
     }
 
     for _ in 0..options.iterations {
-        loop_subdivide_once(mesh, options.preserve_boundary);
+        loop_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
 }
 
@@ -55,32 +56,32 @@ pub fn loop_subdivide_with_progress<I: MeshIndex>(
 
     for iter in 0..options.iterations {
         progress.report(iter, options.iterations, "Loop subdivision");
-        loop_subdivide_once(mesh, options.preserve_boundary);
+        loop_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
     progress.report(options.iterations, options.iterations, "Loop subdivision");
 }
 
 /// Perform one iteration of Loop subdivision.
-fn loop_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool) {
+fn loop_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool, parallel: bool) {
     let (vertices, faces) = to_face_vertex(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
         return;
     }
 
-    // Build edge information
+    // Build edge information (sequential - builds HashMap)
     let edge_info = build_edge_info(&faces);
 
-    // Compute new edge vertices
-    let edge_vertices = compute_edge_vertices(&vertices, &faces, &edge_info, preserve_boundary);
+    // Compute new edge vertices (parallel)
+    let edge_vertices = compute_edge_vertices(&vertices, &edge_info, preserve_boundary, parallel);
 
-    // Compute updated vertex positions
+    // Compute updated vertex positions (parallel)
     let updated_vertices =
-        compute_updated_vertices(&vertices, &faces, &edge_info, preserve_boundary);
+        compute_updated_vertices(&vertices, &faces, &edge_info, preserve_boundary, parallel);
 
-    // Build the subdivided mesh
+    // Build the subdivided mesh (parallel)
     let (new_vertices, new_faces) =
-        build_subdivided_mesh(&updated_vertices, &edge_vertices, &faces, &edge_info);
+        build_subdivided_mesh(&updated_vertices, &edge_vertices, &faces, &edge_info, parallel);
 
     // Rebuild the half-edge mesh
     if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &new_faces) {
@@ -141,39 +142,48 @@ fn build_edge_info(faces: &[[usize; 3]]) -> HashMap<(usize, usize), EdgeInfo> {
 /// Compute positions for new edge vertices.
 fn compute_edge_vertices(
     vertices: &[Point3<f64>],
-    _faces: &[[usize; 3]],
     edge_info: &HashMap<(usize, usize), EdgeInfo>,
     preserve_boundary: bool,
+    parallel: bool,
 ) -> Vec<Point3<f64>> {
-    let mut edge_vertices = vec![Point3::origin(); edge_info.len()];
+    // Collect edges into a vec for indexed access
+    let edges: Vec<_> = edge_info.iter().collect();
+    let num_edges = edges.len();
 
-    for (&(v0, v1), info) in edge_info {
+    let compute_edge = |idx: usize| -> (usize, Point3<f64>)  {
+        let (&(v0, v1), info) = edges[idx];
         let p0 = &vertices[v0];
         let p1 = &vertices[v1];
 
         let new_pos = if info.opposite2.is_none() {
-            // Boundary edge: simple midpoint (or weighted for smooth boundary)
-            if preserve_boundary {
-                // Linear interpolation for sharp boundary
-                Point3::from((p0.coords + p1.coords) * 0.5)
-            } else {
-                // Could use boundary subdivision rules here
-                Point3::from((p0.coords + p1.coords) * 0.5)
-            }
+            // Boundary edge: simple midpoint
+            Point3::from((p0.coords + p1.coords) * 0.5)
         } else {
             // Interior edge: weighted average
-            // new_pos = 3/8 * (v0 + v1) + 1/8 * (opposite1 + opposite2)
             let p_opp1 = &vertices[info.opposite1];
             let p_opp2 = &vertices[info.opposite2.unwrap()];
-
             Point3::from(
                 (p0.coords + p1.coords) * (3.0 / 8.0)
                     + (p_opp1.coords + p_opp2.coords) * (1.0 / 8.0),
             )
         };
+        (info.new_vertex_index, new_pos)
+    };
 
-        edge_vertices[info.new_vertex_index] = new_pos;
+    let results: Vec<_> = if parallel {
+        (0..num_edges).into_par_iter().map(compute_edge).collect()
+    } else {
+        (0..num_edges).map(compute_edge).collect()
+    };
+
+    // Build result vector
+    let mut edge_vertices = vec![Point3::origin(); num_edges];
+    for (idx, pos) in results {
+        edge_vertices[idx] = pos;
     }
+
+    // Suppress unused warning for preserve_boundary (kept for API compatibility)
+    let _ = preserve_boundary;
 
     edge_vertices
 }
@@ -184,26 +194,25 @@ fn compute_updated_vertices(
     faces: &[[usize; 3]],
     edge_info: &HashMap<(usize, usize), EdgeInfo>,
     preserve_boundary: bool,
+    parallel: bool,
 ) -> Vec<Point3<f64>> {
     let n = vertices.len();
 
-    // Build adjacency and identify boundary vertices
-    let (neighbors, boundary_neighbors) = build_vertex_adjacency(vertices.len(), faces, edge_info);
+    // Build adjacency and identify boundary vertices (sequential)
+    let (neighbors, boundary_neighbors) = build_vertex_adjacency(n, faces, edge_info);
 
-    let mut updated = Vec::with_capacity(n);
-
-    for (i, pos) in vertices.iter().enumerate() {
+    // Compute updated positions
+    let compute_vertex = |i: usize| -> Point3<f64> {
+        let pos = &vertices[i];
         let is_boundary = !boundary_neighbors[i].is_empty();
 
-        let new_pos = if is_boundary && preserve_boundary {
+        if is_boundary && preserve_boundary {
             // Boundary vertex rule
             if boundary_neighbors[i].len() == 2 {
-                // Regular boundary vertex: 1/8 * (left + right) + 3/4 * v
                 let left = &vertices[boundary_neighbors[i][0]];
                 let right = &vertices[boundary_neighbors[i][1]];
                 Point3::from((left.coords + right.coords) * (1.0 / 8.0) + pos.coords * (3.0 / 4.0))
             } else {
-                // Corner or irregular boundary: keep position
                 *pos
             }
         } else {
@@ -215,17 +224,18 @@ fn compute_updated_vertices(
                 let beta = compute_loop_beta(n_neighbors);
                 let neighbor_sum: Vector3<f64> =
                     neighbors[i].iter().map(|&j| vertices[j].coords).sum();
-
                 Point3::from(
                     pos.coords * (1.0 - n_neighbors as f64 * beta) + neighbor_sum * beta,
                 )
             }
-        };
+        }
+    };
 
-        updated.push(new_pos);
+    if parallel {
+        (0..n).into_par_iter().map(compute_vertex).collect()
+    } else {
+        (0..n).map(compute_vertex).collect()
     }
-
-    updated
 }
 
 /// Compute the Loop subdivision beta coefficient for a vertex with n neighbors.
@@ -291,6 +301,7 @@ fn build_subdivided_mesh(
     edge_vertices: &[Point3<f64>],
     original_faces: &[[usize; 3]],
     edge_info: &HashMap<(usize, usize), EdgeInfo>,
+    parallel: bool,
 ) -> (Vec<Point3<f64>>, Vec<[usize; 3]>) {
     // New vertices: original (updated) + edge vertices
     let num_original = updated_vertices.len();
@@ -305,28 +316,37 @@ fn build_subdivided_mesh(
     };
 
     // Build new faces: each original triangle becomes 4 triangles
-    let mut new_faces: Vec<[usize; 3]> = Vec::with_capacity(original_faces.len() * 4);
-
-    for face in original_faces {
+    let build_face_set = |face_idx: usize| -> [[usize; 3]; 4] {
+        let face = &original_faces[face_idx];
         let v0 = face[0];
         let v1 = face[1];
         let v2 = face[2];
 
-        // Edge vertices
         let e01 = get_edge_vertex(v0, v1);
         let e12 = get_edge_vertex(v1, v2);
         let e20 = get_edge_vertex(v2, v0);
 
-        // Four new triangles:
-        // 1. Corner triangle at v0
-        new_faces.push([v0, e01, e20]);
-        // 2. Corner triangle at v1
-        new_faces.push([v1, e12, e01]);
-        // 3. Corner triangle at v2
-        new_faces.push([v2, e20, e12]);
-        // 4. Central triangle
-        new_faces.push([e01, e12, e20]);
-    }
+        [
+            [v0, e01, e20],
+            [v1, e12, e01],
+            [v2, e20, e12],
+            [e01, e12, e20],
+        ]
+    };
+
+    let face_sets: Vec<_> = if parallel {
+        (0..original_faces.len())
+            .into_par_iter()
+            .map(build_face_set)
+            .collect()
+    } else {
+        (0..original_faces.len())
+            .map(build_face_set)
+            .collect()
+    };
+
+    // Flatten into final face list
+    let new_faces: Vec<[usize; 3]> = face_sets.into_iter().flatten().collect();
 
     (new_vertices, new_faces)
 }
@@ -498,7 +518,7 @@ mod tests {
         let faces = vec![[0, 1, 2], [1, 0, 3]];
 
         let edge_info = build_edge_info(&faces);
-        let edge_vertices = compute_edge_vertices(&vertices, &faces, &edge_info, true);
+        let edge_vertices = compute_edge_vertices(&vertices, &edge_info, true, false);
 
         // The shared edge (0, 1) should have an interior edge vertex
         let key = (0, 1);
