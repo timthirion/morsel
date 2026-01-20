@@ -40,6 +40,7 @@ use std::f64::consts::PI;
 use std::marker::PhantomData;
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::mesh::{HalfEdgeMesh, MeshIndex, VertexId};
 
@@ -333,6 +334,9 @@ fn compute_mean_curvature_normal<I: MeshIndex>(
 ///
 /// Uses the angle defect formula: K = (2π - Σθ) / A_mixed
 ///
+/// This function uses parallel computation by default. Use
+/// [`gaussian_curvature_sequential`] for single-threaded execution.
+///
 /// # Example
 ///
 /// ```no_run
@@ -342,32 +346,55 @@ fn compute_mean_curvature_normal<I: MeshIndex>(
 /// let mesh: HalfEdgeMesh = morsel::io::load("mesh.obj").unwrap();
 /// let curvatures = gaussian_curvature(&mesh);
 /// ```
-pub fn gaussian_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
-    let n = mesh.num_vertices();
-    let mut curvatures = vec![0.0; n];
+pub fn gaussian_curvature<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
+    gaussian_curvature_impl(mesh, true)
+}
 
-    for v in mesh.vertex_ids() {
+/// Compute Gaussian curvature for all vertices (sequential version).
+///
+/// Uses single-threaded execution. Useful for benchmarking.
+pub fn gaussian_curvature_sequential<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
+    gaussian_curvature_impl(mesh, false)
+}
+
+fn gaussian_curvature_impl<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>, parallel: bool) -> Vec<f64> {
+    let n = mesh.num_vertices();
+    let vertex_indices: Vec<usize> = (0..n).collect();
+
+    let compute_vertex = |idx: usize| -> f64 {
+        let v = VertexId::<I>::new(idx);
         let angle_sum = compute_angle_sum(mesh, v);
         let area = compute_mixed_area(mesh, v);
 
         let angle_defect = 2.0 * PI - angle_sum;
 
-        // For boundary vertices, the angle defect is different
-        // but we'll compute it the same way and let the user interpret
         if area > 1e-10 {
-            curvatures[v.index()] = angle_defect / area;
+            angle_defect / area
         } else {
-            curvatures[v.index()] = 0.0;
+            0.0
         }
-    }
+    };
 
-    curvatures
+    if parallel {
+        vertex_indices
+            .par_iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    } else {
+        vertex_indices
+            .iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    }
 }
 
 /// Compute mean curvature for all vertices.
 ///
 /// Uses the cotangent Laplacian: H = ||Δx|| / (2 * A_mixed)
 /// The sign is determined by the direction relative to the vertex normal.
+///
+/// This function uses parallel computation by default. Use
+/// [`mean_curvature_sequential`] for single-threaded execution.
 ///
 /// # Example
 ///
@@ -378,11 +405,23 @@ pub fn gaussian_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
 /// let mesh: HalfEdgeMesh = morsel::io::load("mesh.obj").unwrap();
 /// let curvatures = mean_curvature(&mesh);
 /// ```
-pub fn mean_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
-    let n = mesh.num_vertices();
-    let mut curvatures = vec![0.0; n];
+pub fn mean_curvature<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
+    mean_curvature_impl(mesh, true)
+}
 
-    for v in mesh.vertex_ids() {
+/// Compute mean curvature for all vertices (sequential version).
+///
+/// Uses single-threaded execution. Useful for benchmarking.
+pub fn mean_curvature_sequential<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
+    mean_curvature_impl(mesh, false)
+}
+
+fn mean_curvature_impl<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>, parallel: bool) -> Vec<f64> {
+    let n = mesh.num_vertices();
+    let vertex_indices: Vec<usize> = (0..n).collect();
+
+    let compute_vertex = |idx: usize| -> f64 {
+        let v = VertexId::<I>::new(idx);
         let laplacian = compute_mean_curvature_normal(mesh, v);
         let area = compute_mixed_area(mesh, v);
 
@@ -398,18 +437,31 @@ pub fn mean_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
                 -1.0
             };
 
-            curvatures[v.index()] = sign * h_unsigned;
+            sign * h_unsigned
         } else {
-            curvatures[v.index()] = 0.0;
+            0.0
         }
-    }
+    };
 
-    curvatures
+    if parallel {
+        vertex_indices
+            .par_iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    } else {
+        vertex_indices
+            .iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    }
 }
 
 /// Compute all curvatures (Gaussian, mean, and principal) for all vertices.
 ///
 /// This is more efficient than computing each separately when you need all of them.
+///
+/// This function uses parallel computation by default. Use
+/// [`compute_curvature_sequential`] for single-threaded execution.
 ///
 /// # Example
 ///
@@ -428,16 +480,35 @@ pub fn mean_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Vec<f64> {
 ///              v.index(), k, h, k1, k2);
 /// }
 /// ```
-pub fn compute_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> CurvatureResult<I> {
+pub fn compute_curvature<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>) -> CurvatureResult<I> {
+    compute_curvature_impl(mesh, true)
+}
+
+/// Compute all curvatures (sequential version).
+///
+/// Uses single-threaded execution. Useful for benchmarking.
+pub fn compute_curvature_sequential<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> CurvatureResult<I> {
+    compute_curvature_impl(mesh, false)
+}
+
+/// Per-vertex curvature data computed in parallel.
+#[derive(Debug, Clone)]
+struct VertexCurvature {
+    gaussian: f64,
+    mean: f64,
+    principal_max: f64,
+    principal_min: f64,
+}
+
+fn compute_curvature_impl<I: MeshIndex + Sync>(
+    mesh: &HalfEdgeMesh<I>,
+    parallel: bool,
+) -> CurvatureResult<I> {
     let n = mesh.num_vertices();
+    let vertex_indices: Vec<usize> = (0..n).collect();
 
-    let mut gaussian = vec![0.0; n];
-    let mut mean = vec![0.0; n];
-    let mut principal_max = vec![0.0; n];
-    let mut principal_min = vec![0.0; n];
-
-    for v in mesh.vertex_ids() {
-        let idx = v.index();
+    let compute_vertex = |idx: usize| -> VertexCurvature {
+        let v = VertexId::<I>::new(idx);
 
         // Compute area once
         let area = compute_mixed_area(mesh, v);
@@ -450,7 +521,6 @@ pub fn compute_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> CurvatureResul
         } else {
             0.0
         };
-        gaussian[idx] = k;
 
         // Mean curvature
         let laplacian = compute_mean_curvature_normal(mesh, v);
@@ -469,19 +539,48 @@ pub fn compute_curvature<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> CurvatureResul
         } else {
             0.0
         };
-        mean[idx] = h;
 
         // Principal curvatures: k1, k2 = H ± sqrt(H² - K)
         let discriminant = h * h - k;
-        if discriminant >= 0.0 {
+        let (principal_max, principal_min) = if discriminant >= 0.0 {
             let sqrt_disc = discriminant.sqrt();
-            principal_max[idx] = h + sqrt_disc;
-            principal_min[idx] = h - sqrt_disc;
+            (h + sqrt_disc, h - sqrt_disc)
         } else {
             // Numerical issues: fall back to H for both
-            principal_max[idx] = h;
-            principal_min[idx] = h;
+            (h, h)
+        };
+
+        VertexCurvature {
+            gaussian: k,
+            mean: h,
+            principal_max,
+            principal_min,
         }
+    };
+
+    let results: Vec<VertexCurvature> = if parallel {
+        vertex_indices
+            .par_iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    } else {
+        vertex_indices
+            .iter()
+            .map(|&idx| compute_vertex(idx))
+            .collect()
+    };
+
+    // Unpack results into separate vectors
+    let mut gaussian = Vec::with_capacity(n);
+    let mut mean = Vec::with_capacity(n);
+    let mut principal_max = Vec::with_capacity(n);
+    let mut principal_min = Vec::with_capacity(n);
+
+    for vc in results {
+        gaussian.push(vc.gaussian);
+        mean.push(vc.mean);
+        principal_max.push(vc.principal_max);
+        principal_min.push(vc.principal_min);
     }
 
     CurvatureResult {
