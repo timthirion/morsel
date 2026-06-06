@@ -13,7 +13,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use morsel::algo::{
-    curvature, decimate, remesh, smooth, subdivide, Progress,
+    curvature, decimate, parameterize, remesh, smooth, subdivide, Progress,
 };
 use morsel::io;
 use morsel::mesh::HalfEdgeMesh;
@@ -113,6 +113,21 @@ enum Commands {
         sequential: bool,
     },
 
+    /// Compute UV coordinates and write a UV-bearing mesh
+    Parameterize {
+        /// Input mesh file
+        input: PathBuf,
+
+        /// Output mesh file (UVs written as `vt` entries when
+        /// the format supports them — `.obj` does, `.stl` does
+        /// not).
+        output: PathBuf,
+
+        /// Parameterization method
+        #[arg(short, long, value_enum, default_value = "cylindrical")]
+        method: ParameterizeMethod,
+    },
+
     /// Remesh to improve triangle quality
     Remesh {
         /// Input mesh file
@@ -163,6 +178,21 @@ enum RemeshMethod {
     Isotropic,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum ParameterizeMethod {
+    /// Cylindrical projection (works on closed meshes; seam along
+    /// the back of the projection axis where `atan2` wraps)
+    Cylindrical,
+    /// LSCM — Least Squares Conformal Maps. Angle-preserving;
+    /// requires the mesh to have boundary (disk topology). Closed
+    /// meshes need a manual cut before this works.
+    Lscm,
+    /// ARAP — As-Rigid-As-Possible. Higher quality than LSCM but
+    /// also needs boundary. Iterative.
+    Arap,
+}
+
+
 fn main() {
     let cli = Cli::parse();
 
@@ -209,6 +239,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             sequential,
         } => {
             cmd_decimate(&input, &output, faces, ratio, collapse_boundary, sequential)?;
+        }
+
+        Commands::Parameterize {
+            input,
+            output,
+            method,
+        } => {
+            cmd_parameterize(&input, &output, method)?;
         }
 
         Commands::Remesh {
@@ -525,6 +563,57 @@ fn cmd_remesh(
     println!("Result: {} vertices, {} faces (avg edge: {:.6})",
         mesh.num_vertices(), mesh.num_faces(), new_avg);
     io::save(&mesh, output)?;
+    println!("Saved: {} ({:.2?})", output.display(), elapsed);
+
+    Ok(())
+}
+
+fn cmd_parameterize(
+    input: &PathBuf,
+    output: &PathBuf,
+    method: ParameterizeMethod,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use morsel::io::obj as obj_io;
+
+    let mesh: HalfEdgeMesh = io::load(input)?;
+    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+
+    let start = Instant::now();
+    let uvs = match method {
+        ParameterizeMethod::Cylindrical => {
+            println!("Computing cylindrical UV projection around Y axis...");
+            parameterize::cylindrical_projection(&mesh)
+        }
+        ParameterizeMethod::Lscm => {
+            println!("Computing LSCM UV parameterization...");
+            // LSCM needs disk topology (boundary). Closed meshes fail here.
+            parameterize::lscm(&mesh, &parameterize::LSCMOptions::default())
+                .map_err(|e| format!("LSCM failed (mesh needs boundary?): {e}"))?
+        }
+        ParameterizeMethod::Arap => {
+            println!("Computing ARAP UV parameterization...");
+            parameterize::arap(&mesh, &parameterize::ARAPOptions::default())
+                .map_err(|e| format!("ARAP failed (mesh needs boundary?): {e}"))?
+        }
+    };
+    let elapsed = start.elapsed();
+
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext.to_ascii_lowercase().as_str() {
+        "obj" => {
+            obj_io::save_with_uvs(&mesh, &uvs, output, None)?;
+        }
+        other => {
+            return Err(format!(
+                "parameterize output must be .obj for UV-preserving save (got .{other}); \
+                 OBJ is the only format `save_with_uvs` supports today."
+            )
+            .into());
+        }
+    }
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
     Ok(())
