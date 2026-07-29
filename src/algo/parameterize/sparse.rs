@@ -141,6 +141,111 @@ impl CsrMatrix {
     }
 }
 
+impl CsrMatrix {
+    /// Extract the main diagonal.
+    pub fn diagonal(&self) -> DVector<f64> {
+        let n = self.rows.min(self.cols);
+        let mut d = DVector::zeros(n);
+        for i in 0..n {
+            for k in self.row_ptr[i]..self.row_ptr[i + 1] {
+                if self.col_idx[k] == i {
+                    d[i] += self.values[k];
+                }
+            }
+        }
+        d
+    }
+}
+
+/// Solve A*x = b using Jacobi-preconditioned Conjugate Gradient.
+///
+/// Requires A to be symmetric positive definite.
+///
+/// The diagonal preconditioner matters a great deal for the LSCM system, whose
+/// pin constraints are imposed by a large penalty on two diagonal entries. That
+/// penalty inflates the condition number by its own magnitude, so unpreconditioned
+/// CG needs on the order of `√penalty` iterations to make progress. Scaling the
+/// diagonal away removes that factor and leaves only the mesh's own conditioning.
+///
+/// # Arguments
+///
+/// * `a` - The system matrix (must be symmetric positive definite)
+/// * `b` - The right-hand side vector
+/// * `x0` - Optional initial guess (zeros if None)
+/// * `max_iter` - Maximum number of iterations
+/// * `tolerance` - Convergence tolerance (relative residual norm)
+pub fn preconditioned_conjugate_gradient(
+    a: &CsrMatrix,
+    b: &DVector<f64>,
+    x0: Option<&DVector<f64>>,
+    max_iter: usize,
+    tolerance: f64,
+) -> Result<DVector<f64>> {
+    let n = b.len();
+    assert_eq!(a.nrows(), n, "Matrix-vector dimension mismatch");
+    assert_eq!(a.ncols(), n, "Matrix must be square");
+
+    // Inverse diagonal, falling back to 1 where the diagonal vanishes.
+    let diag = a.diagonal();
+    let inv_diag: Vec<f64> = diag
+        .iter()
+        .map(|&d| if d.abs() > 1e-300 { 1.0 / d } else { 1.0 })
+        .collect();
+    let apply_precond = |v: &DVector<f64>| -> DVector<f64> {
+        DVector::from_iterator(n, v.iter().zip(&inv_diag).map(|(&vi, &m)| vi * m))
+    };
+
+    let mut x = match x0 {
+        Some(x0) => x0.clone(),
+        None => DVector::zeros(n),
+    };
+
+    let b_norm = b.norm();
+    if b_norm < 1e-15 {
+        return Ok(x);
+    }
+
+    let mut r = b - a.mul_vec(&x);
+    if r.norm() / b_norm < tolerance {
+        return Ok(x);
+    }
+
+    let mut z = apply_precond(&r);
+    let mut p = z.clone();
+    let mut rz = r.dot(&z);
+
+    for _ in 0..max_iter {
+        let ap = a.mul_vec(&p);
+        let p_ap = p.dot(&ap);
+        if p_ap.abs() < 1e-300 {
+            break;
+        }
+
+        let alpha = rz / p_ap;
+        x.axpy(alpha, &p, 1.0);
+        r.axpy(-alpha, &ap, 1.0);
+
+        if r.norm() / b_norm < tolerance {
+            return Ok(x);
+        }
+
+        z = apply_precond(&r);
+        let rz_new = r.dot(&z);
+        if rz.abs() < 1e-300 {
+            break;
+        }
+        let beta = rz_new / rz;
+        // p = z + beta * p
+        p *= beta;
+        p += &z;
+        rz = rz_new;
+    }
+
+    Err(MeshError::ConvergenceFailed {
+        iterations: max_iter,
+    })
+}
+
 /// Solve A*x = b using the Conjugate Gradient method.
 ///
 /// Requires A to be symmetric positive definite.

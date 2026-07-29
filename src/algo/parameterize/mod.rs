@@ -8,6 +8,7 @@
 //!
 //! - [`lscm`]: Least Squares Conformal Maps - minimizes angle distortion
 //! - [`arap`]: As-Rigid-As-Possible - minimizes both angle and area distortion
+//! - [`omt`]: Optimal Mass Transport - area-preserving correction
 //!
 //! # Requirements
 //!
@@ -44,9 +45,11 @@
 
 mod arap;
 mod lscm;
+mod omt;
 pub mod sparse;
 mod uv;
 
 pub use arap::{arap, ARAPOptions};
 pub use lscm::{lscm, LSCMOptions, PinStrategy, PinnedVertex};
+pub use omt::{compute_area_distortion, omt, omt_with_report, OMTOptions, OMTReport};
 pub use uv::{cylindrical_projection, UVMap};

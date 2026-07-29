@@ -19,7 +19,7 @@ use crate::error::{MeshError, Result};
 use crate::mesh::{to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::lscm::{lscm, LSCMOptions};
-use super::sparse::{conjugate_gradient, CsrMatrix};
+use super::sparse::{preconditioned_conjugate_gradient, CsrMatrix};
 use super::uv::UVMap;
 
 /// Options for ARAP parameterization.
@@ -44,7 +44,7 @@ impl Default for ARAPOptions {
         Self {
             iterations: 10,
             max_cg_iterations: 1000,
-            cg_tolerance: 1e-8,
+            cg_tolerance: 1e-12,
             use_lscm_init: true,
         }
     }
@@ -163,7 +163,7 @@ pub fn arap<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &ARAPOptions) -> Resu
         );
 
         // Solve for u coordinates
-        let u_solution = conjugate_gradient(
+        let u_solution = preconditioned_conjugate_gradient(
             &system_matrix,
             &rhs.0,
             None,
@@ -172,7 +172,7 @@ pub fn arap<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &ARAPOptions) -> Resu
         )?;
 
         // Solve for v coordinates
-        let v_solution = conjugate_gradient(
+        let v_solution = preconditioned_conjugate_gradient(
             &system_matrix,
             &rhs.1,
             None,
@@ -299,8 +299,8 @@ fn compute_tutte_embedding(
     let matrix = CsrMatrix::from_triplets(n_interior, n_interior, triplets);
 
     // Solve for interior u and v
-    let u_solution = conjugate_gradient(&matrix, &rhs_u, None, 1000, 1e-8)?;
-    let v_solution = conjugate_gradient(&matrix, &rhs_v, None, 1000, 1e-8)?;
+    let u_solution = preconditioned_conjugate_gradient(&matrix, &rhs_u, None, 1000, 1e-12)?;
+    let v_solution = preconditioned_conjugate_gradient(&matrix, &rhs_v, None, 1000, 1e-12)?;
 
     for (i, &v) in interior.iter().enumerate() {
         uv_coords[v] = Point2::new(u_solution[i], v_solution[i]);
@@ -507,7 +507,7 @@ fn build_arap_system_matrix(
 
     // Pin one boundary vertex (add large value to diagonal)
     let pinned = boundary[0];
-    let penalty = 1e10;
+    let penalty = 1e6;
     triplets.push((pinned, pinned, penalty));
 
     let matrix = CsrMatrix::from_triplets(n_vertices, n_vertices, triplets);
@@ -554,7 +554,7 @@ fn build_arap_rhs(
     }
 
     // Pin constraint
-    let penalty = 1e10;
+    let penalty = 1e6;
     rhs_u[pinned_vertex] += penalty * uv_coords[pinned_vertex].x;
     rhs_v[pinned_vertex] += penalty * uv_coords[pinned_vertex].y;
 

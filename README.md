@@ -28,6 +28,7 @@ cargo install --path . --features cli
 | `subdivide` | Subdivide a mesh (loop, catmull-clark) |
 | `decimate` | Simplify a mesh using QEM |
 | `remesh` | Remesh to improve triangle quality |
+| `parameterize` | Compute UV coordinates (cylindrical, LSCM, ARAP, OMT) |
 
 **Examples:**
 ```bash
@@ -49,7 +50,21 @@ morsel decimate input.obj output.obj --faces 1000
 
 # Remesh with target edge length
 morsel remesh input.obj output.obj --target-length 0.1
+
+# UV-unwrap an open (disk-topology) mesh, angle-preserving
+morsel parameterize patch.obj patch_uv.obj --method lscm
+
+# Area-preserving: LSCM followed by an optimal-mass-transport correction
+morsel parameterize patch.obj patch_uv.obj --method omt
+
+# Closed meshes have no boundary; only cylindrical projection applies
+morsel parameterize sphere.obj sphere_uv.obj --method cylindrical
 ```
+
+`lscm`, `arap`, and `omt` need a boundary (cut a closed mesh first). `omt`
+reports area distortion before and after, and warns when the mesh is too dense
+for its sampling-based power diagram to be reliable — see the notes on
+`OMTOptions::for_vertex_count`.
 
 Run `morsel <command> --help` for detailed options.
 

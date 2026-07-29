@@ -126,6 +126,10 @@ enum Commands {
         /// Parameterization method
         #[arg(short, long, value_enum, default_value = "cylindrical")]
         method: ParameterizeMethod,
+
+        /// Optional material/texture name for the MTL reference
+        #[arg(long)]
+        material: Option<String>,
     },
 
     /// Remesh to improve triangle quality
@@ -190,8 +194,18 @@ enum ParameterizeMethod {
     /// ARAP — As-Rigid-As-Possible. Higher quality than LSCM but
     /// also needs boundary. Iterative.
     Arap,
+    /// OMT — Optimal Mass Transport. Area-preserving; runs LSCM
+    /// first and corrects its area distortion. Also needs boundary.
+    Omt,
 }
 
+/// Methods that solve over a UV domain and therefore require the mesh
+/// to have boundary (disk topology). Cylindrical projection does not.
+impl ParameterizeMethod {
+    fn requires_boundary(self) -> bool {
+        !matches!(self, ParameterizeMethod::Cylindrical)
+    }
+}
 
 fn main() {
     let cli = Cli::parse();
@@ -245,8 +259,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             input,
             output,
             method,
+            material,
         } => {
-            cmd_parameterize(&input, &output, method)?;
+            cmd_parameterize(&input, &output, method, material.as_deref())?;
         }
 
         Commands::Remesh {
@@ -572,11 +587,27 @@ fn cmd_parameterize(
     input: &PathBuf,
     output: &PathBuf,
     method: ParameterizeMethod,
+    material: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use morsel::io::obj as obj_io;
 
     let mesh: HalfEdgeMesh = io::load(input)?;
     println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+
+    // Every method except cylindrical projection solves over a UV domain
+    // pinned to the boundary, so a closed mesh has to be cut first.
+    if method.requires_boundary() {
+        let boundary_count = mesh
+            .vertex_ids()
+            .filter(|&v| mesh.is_boundary_vertex(v))
+            .count();
+        if boundary_count == 0 {
+            return Err("Mesh has no boundary; this method requires disk topology (open mesh). \
+                        Cut the mesh first, or use `--method cylindrical`."
+                .into());
+        }
+        println!("Boundary vertices: {}", boundary_count);
+    }
 
     let start = Instant::now();
     let uvs = match method {
@@ -585,26 +616,80 @@ fn cmd_parameterize(
             parameterize::cylindrical_projection(&mesh)
         }
         ParameterizeMethod::Lscm => {
-            println!("Computing LSCM UV parameterization...");
-            // LSCM needs disk topology (boundary). Closed meshes fail here.
+            println!("Computing LSCM parameterization (conformal/angle-preserving)...");
             parameterize::lscm(&mesh, &parameterize::LSCMOptions::default())
-                .map_err(|e| format!("LSCM failed (mesh needs boundary?): {e}"))?
+                .map_err(|e| format!("LSCM failed: {e}"))?
         }
         ParameterizeMethod::Arap => {
-            println!("Computing ARAP UV parameterization...");
+            println!("Computing ARAP parameterization (as-rigid-as-possible)...");
             parameterize::arap(&mesh, &parameterize::ARAPOptions::default())
-                .map_err(|e| format!("ARAP failed (mesh needs boundary?): {e}"))?
+                .map_err(|e| format!("ARAP failed: {e}"))?
+        }
+        ParameterizeMethod::Omt => {
+            println!("Computing LSCM parameterization as base...");
+            let lscm_uvs = parameterize::lscm(&mesh, &parameterize::LSCMOptions::default())
+                .map_err(|e| format!("LSCM (OMT base) failed: {e}"))?;
+
+            let (min_lscm, max_lscm, rms_lscm) =
+                parameterize::compute_area_distortion(&mesh, &lscm_uvs);
+            println!(
+                "LSCM area distortion: min={:.3}, max={:.3}, rms={:.4}",
+                min_lscm, max_lscm, rms_lscm
+            );
+
+            // Scale the sampling grid to the mesh; at a fixed resolution the
+            // area estimates degrade as vertex count grows.
+            let opts = parameterize::OMTOptions::for_vertex_count(mesh.num_vertices());
+            println!(
+                "Applying OMT area-preserving correction (grid {}²)...",
+                opts.grid_resolution
+            );
+            let (omt_uvs, report) = parameterize::omt_with_report(&mesh, &lscm_uvs, &opts)
+                .map_err(|e| format!("OMT failed: {e}"))?;
+
+            let (min_omt, max_omt, rms_omt) =
+                parameterize::compute_area_distortion(&mesh, &omt_uvs);
+            println!(
+                "OMT area distortion:  min={:.3}, max={:.3}, rms={:.4}",
+                min_omt, max_omt, rms_omt
+            );
+
+            if !report.is_well_sampled() {
+                eprintln!(
+                    "warning: only {:.1} grid samples per power cell ({} samples, {} vertices). \
+                     Below ~25 the area estimates are unreliable and OMT can make distortion \
+                     worse rather than better; treat this result with suspicion. This mesh is \
+                     too dense for the sampling-based power diagram.",
+                    report.samples_per_cell(),
+                    report.domain_samples,
+                    report.sites
+                );
+            }
+            if rms_omt >= rms_lscm {
+                eprintln!(
+                    "warning: OMT did not improve on the conformal input \
+                     (rms {rms_lscm:.4} -> {rms_omt:.4}); consider using `--method lscm`."
+                );
+            }
+
+            omt_uvs
         }
     };
     let elapsed = start.elapsed();
 
-    let ext = output
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    // OMT already printed its own before/after comparison above.
+    if method != ParameterizeMethod::Omt {
+        let (min_ratio, max_ratio, rms_error) = parameterize::compute_area_distortion(&mesh, &uvs);
+        println!(
+            "Area distortion: min={:.3}, max={:.3}, rms={:.4}",
+            min_ratio, max_ratio, rms_error
+        );
+    }
+
+    let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext.to_ascii_lowercase().as_str() {
         "obj" => {
-            obj_io::save_with_uvs(&mesh, &uvs, output, None)?;
+            obj_io::save_with_uvs(&mesh, &uvs, output, material)?;
         }
         other => {
             return Err(format!(

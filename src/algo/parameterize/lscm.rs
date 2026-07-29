@@ -14,7 +14,7 @@ use nalgebra::{DVector, Point2, Point3};
 use crate::error::{MeshError, Result};
 use crate::mesh::{to_face_vertex, HalfEdgeMesh, MeshIndex};
 
-use super::sparse::{conjugate_gradient, CsrMatrix};
+use super::sparse::{preconditioned_conjugate_gradient, CsrMatrix};
 use super::uv::UVMap;
 
 /// Options for LSCM parameterization.
@@ -26,7 +26,27 @@ pub struct LSCMOptions {
     /// Maximum iterations for the conjugate gradient solver.
     pub max_iterations: usize,
 
-    /// Convergence tolerance for the CG solver.
+    /// Convergence tolerance for the CG solver, as a *relative* residual
+    /// `‖r‖ / ‖b‖`.
+    ///
+    /// This has to be much tighter than it looks. Pin constraints are imposed
+    /// by a penalty term (see `build_lscm_system`), so `‖b‖` is dominated by
+    /// `penalty × pin_target` while the conformal-energy rows are of order 1.
+    /// A relative tolerance of `1e-8` against a `‖b‖` of ~`1e6` leaves an
+    /// absolute residual of ~`1e-2` in the rows that actually carry the
+    /// geometry — enough to wreck the result, and progressively worse as the
+    /// mesh grows. Measured on a flat grid, whose exact answer is the identity:
+    ///
+    /// | vertices | `tol = 1e-8` | `tol = 1e-12` |
+    /// |----------|--------------|---------------|
+    /// | 25       | 5.7e-4       | 5.8e-9        |
+    /// | 81       | **1.3e0**    | 2.3e-7        |
+    /// | 289      | **1.8e0**    | 3.4e-7        |
+    ///
+    /// `1e-12` is about the floor for a `1e6` penalty; asking for `1e-14`
+    /// exhausts the iteration budget without converging. Eliminating the
+    /// pinned degrees of freedom instead of penalizing them would remove this
+    /// coupling altogether and is the better long-term fix.
     pub tolerance: f64,
 }
 
@@ -35,7 +55,7 @@ impl Default for LSCMOptions {
         Self {
             pin_strategy: PinStrategy::Automatic,
             max_iterations: 1000,
-            tolerance: 1e-8,
+            tolerance: 1e-12,
         }
     }
 }
@@ -150,7 +170,13 @@ pub fn lscm<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &LSCMOptions) -> Resu
     let (matrix, rhs) = build_lscm_system(&vertices, &faces, n_vertices, &pin0, &pin1);
 
     // Solve using conjugate gradient
-    let solution = conjugate_gradient(&matrix, &rhs, None, options.max_iterations, options.tolerance)?;
+    let solution = preconditioned_conjugate_gradient(
+        &matrix,
+        &rhs,
+        None,
+        options.max_iterations,
+        options.tolerance,
+    )?;
 
     // Extract UV coordinates from solution
     let mut uv_coords = vec![Point2::origin(); n_vertices];
@@ -405,7 +431,10 @@ fn build_lscm_system(
 
     // Handle pinned vertices by adding large penalty terms
     // This is the penalty method: add λ * (u_pin - u_target)² to the energy
-    let penalty = 1e10;
+    // Penalty should be large enough to enforce pin constraints but not so large
+    // that it overwhelms the conformal energy and causes numerical issues.
+    // A penalty of ~1e6 works well for typical mesh scales.
+    let penalty = 1e6;
 
     // Pin vertex 0
     triplets.push((pin0.vertex, pin0.vertex, penalty));
