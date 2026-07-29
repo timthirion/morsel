@@ -418,7 +418,10 @@ impl BilateralOptions {
 ///
 /// Fleishman, S., Drori, I., & Cohen-Or, D. (2003). "Bilateral mesh denoising."
 /// ACM SIGGRAPH 2003.
-pub fn bilateral_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &BilateralOptions) {
+pub fn bilateral_smooth<I: MeshIndex + Sync>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &BilateralOptions,
+) {
     if options.iterations == 0 {
         return;
     }
@@ -613,7 +616,10 @@ impl CurvatureFlowOptions {
 ///
 /// Desbrun, M., et al. (1999). "Implicit fairing of irregular meshes using
 /// diffusion and curvature flow." SIGGRAPH 99.
-pub fn mean_curvature_flow<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options: &CurvatureFlowOptions) {
+pub fn mean_curvature_flow<I: MeshIndex + Sync>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &CurvatureFlowOptions,
+) {
     if options.iterations == 0 {
         return;
     }
@@ -971,7 +977,11 @@ pub fn laplacian_smooth_with_progress<I: MeshIndex + Sync>(
             mesh.set_position(vid, new_positions[i]);
         }
     }
-    progress.report(options.iterations, options.iterations, "Laplacian smoothing");
+    progress.report(
+        options.iterations,
+        options.iterations,
+        "Laplacian smoothing",
+    );
 }
 
 /// Taubin smoothing with progress reporting.
@@ -1060,7 +1070,11 @@ pub fn cotangent_smooth_with_progress<I: MeshIndex + Sync>(
             mesh.set_position(vid, new_positions[i]);
         }
     }
-    progress.report(options.iterations, options.iterations, "Cotangent smoothing");
+    progress.report(
+        options.iterations,
+        options.iterations,
+        "Cotangent smoothing",
+    );
 }
 
 #[cfg(test)]
@@ -1124,7 +1138,9 @@ mod tests {
             / mesh.num_vertices() as f64;
 
         // Smooth the mesh
-        let options = SmoothOptions::default().with_iterations(10).with_lambda(0.5);
+        let options = SmoothOptions::default()
+            .with_iterations(10)
+            .with_lambda(0.5);
         laplacian_smooth(&mut mesh, &options);
 
         // Centroid should be approximately preserved
@@ -1151,7 +1167,9 @@ mod tests {
         let original_area = mesh_laplacian.surface_area();
 
         // Apply many iterations of both methods
-        let options = SmoothOptions::default().with_iterations(20).with_lambda(0.5);
+        let options = SmoothOptions::default()
+            .with_iterations(20)
+            .with_lambda(0.5);
 
         laplacian_smooth(&mut mesh_laplacian, &options);
         taubin_smooth(&mut mesh_taubin, &options);
@@ -1211,10 +1229,7 @@ mod tests {
         // All vertices are boundary, so positions should be unchanged
         for (vid, orig) in mesh.vertex_ids().zip(original.iter()) {
             let pos = mesh.position(vid);
-            assert!(
-                (pos - orig).norm() < 1e-10,
-                "Boundary vertex moved"
-            );
+            assert!((pos - orig).norm() < 1e-10, "Boundary vertex moved");
         }
     }
 
@@ -1230,13 +1245,18 @@ mod tests {
         bilateral_smooth(&mut mesh, &options);
 
         // Mesh should still be valid
-        assert!(mesh.is_valid(), "Mesh should be valid after bilateral smooth");
+        assert!(
+            mesh.is_valid(),
+            "Mesh should be valid after bilateral smooth"
+        );
 
         // All vertices should still exist and have reasonable positions
         for vid in mesh.vertex_ids() {
             let pos = mesh.position(vid);
-            assert!(pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite(),
-                    "Vertex position should be finite");
+            assert!(
+                pos.x.is_finite() && pos.y.is_finite() && pos.z.is_finite(),
+                "Vertex position should be finite"
+            );
         }
     }
 
@@ -1252,10 +1272,7 @@ mod tests {
         // All vertices are boundary, so positions should be unchanged
         for (vid, orig) in mesh.vertex_ids().zip(original.iter()) {
             let pos = mesh.position(vid);
-            assert!(
-                (pos - orig).norm() < 1e-10,
-                "Boundary vertex moved"
-            );
+            assert!((pos - orig).norm() < 1e-10, "Boundary vertex moved");
         }
     }
 
@@ -1307,6 +1324,9 @@ mod tests {
             (new_centroid - original_centroid).norm() < 0.2,
             "Centroid drifted too much"
         );
-        assert!(mesh.is_valid(), "Mesh should be valid after cotangent smooth");
+        assert!(
+            mesh.is_valid(),
+            "Mesh should be valid after cotangent smooth"
+        );
     }
 }

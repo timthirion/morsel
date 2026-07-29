@@ -156,9 +156,12 @@ fn cvt_remesh_internal<I: MeshIndex>(
     if options.retriangulate {
         let projected_seeds = project_points_to_surface(&vertices, &faces, &seeds);
 
-        if let Some((new_verts, new_faces)) =
-            triangulate_seeds_on_surface(&vertices, &faces, &projected_seeds, options.preserve_boundary)
-        {
+        if let Some((new_verts, new_faces)) = triangulate_seeds_on_surface(
+            &vertices,
+            &faces,
+            &projected_seeds,
+            options.preserve_boundary,
+        ) {
             if let Ok(new_mesh) = build_from_triangles::<I>(&new_verts, &new_faces) {
                 *mesh = new_mesh;
             }
@@ -179,7 +182,11 @@ fn cvt_remesh_internal<I: MeshIndex>(
 
     // Report completion
     if let Some(p) = progress {
-        p.report(options.iterations, options.iterations, "CVT remeshing complete");
+        p.report(
+            options.iterations,
+            options.iterations,
+            "CVT remeshing complete",
+        );
     }
 }
 
@@ -241,7 +248,10 @@ pub(crate) fn farthest_point_sampling(
 }
 
 /// Assign each vertex to its nearest seed.
-pub(crate) fn assign_to_nearest_seeds(vertices: &[Point3<f64>], seeds: &[Point3<f64>]) -> Vec<usize> {
+pub(crate) fn assign_to_nearest_seeds(
+    vertices: &[Point3<f64>],
+    seeds: &[Point3<f64>],
+) -> Vec<usize> {
     vertices
         .iter()
         .map(|v| {

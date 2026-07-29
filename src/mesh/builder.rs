@@ -49,7 +49,10 @@ pub fn build_from_triangles<I: MeshIndex>(
     for (fi, face) in faces.iter().enumerate() {
         for &vi in face {
             if vi >= vertices.len() {
-                return Err(MeshError::InvalidVertexIndex { face: fi, vertex: vi });
+                return Err(MeshError::InvalidVertexIndex {
+                    face: fi,
+                    vertex: vi,
+                });
             }
         }
         // Check for degenerate faces
@@ -61,10 +64,7 @@ pub fn build_from_triangles<I: MeshIndex>(
     let mut mesh = HalfEdgeMesh::with_capacity(vertices.len(), faces.len());
 
     // Add vertices
-    let vertex_ids: Vec<VertexId<I>> = vertices
-        .iter()
-        .map(|&pos| mesh.add_vertex(pos))
-        .collect();
+    let vertex_ids: Vec<VertexId<I>> = vertices.iter().map(|&pos| mesh.add_vertex(pos)).collect();
 
     // Map from directed edge (v0, v1) to half-edge ID
     let mut edge_map: HashMap<(usize, usize), HalfEdgeId<I>> = HashMap::new();
@@ -240,7 +240,10 @@ pub fn build_from_quads<I: MeshIndex>(
     for (fi, face) in faces.iter().enumerate() {
         for &vi in face {
             if vi >= vertices.len() {
-                return Err(MeshError::InvalidVertexIndex { face: fi, vertex: vi });
+                return Err(MeshError::InvalidVertexIndex {
+                    face: fi,
+                    vertex: vi,
+                });
             }
         }
         // Check for degenerate faces (duplicate vertices)
@@ -258,10 +261,7 @@ pub fn build_from_quads<I: MeshIndex>(
     let mut mesh = HalfEdgeMesh::with_capacity(vertices.len(), faces.len());
 
     // Add vertices
-    let vertex_ids: Vec<VertexId<I>> = vertices
-        .iter()
-        .map(|&pos| mesh.add_vertex(pos))
-        .collect();
+    let vertex_ids: Vec<VertexId<I>> = vertices.iter().map(|&pos| mesh.add_vertex(pos)).collect();
 
     // Map from directed edge (v0, v1) to half-edge ID
     let mut edge_map: HashMap<(usize, usize), HalfEdgeId<I>> = HashMap::new();

@@ -153,7 +153,11 @@ mod tests {
 
         // Check that it's a closed mesh (no boundary vertices)
         for v in mesh.vertex_ids() {
-            assert!(!mesh.is_boundary_vertex(v), "vertex {:?} should not be on boundary", v);
+            assert!(
+                !mesh.is_boundary_vertex(v),
+                "vertex {:?} should not be on boundary",
+                v
+            );
         }
     }
 }

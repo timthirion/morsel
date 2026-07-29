@@ -49,12 +49,11 @@ pub fn load_with_uvs<P: AsRef<Path>, I: MeshIndex>(
 
     let path = path.as_ref();
 
-    let (models, _materials) = tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS).map_err(|e| {
-        MeshError::LoadError {
+    let (models, _materials) =
+        tobj::load_obj(path, &tobj::GPU_LOAD_OPTIONS).map_err(|e| MeshError::LoadError {
             path: path.to_path_buf(),
             message: e.to_string(),
-        }
-    })?;
+        })?;
 
     if models.is_empty() {
         return Err(MeshError::LoadError {

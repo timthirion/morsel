@@ -62,7 +62,11 @@ pub fn loop_subdivide_with_progress<I: MeshIndex>(
 }
 
 /// Perform one iteration of Loop subdivision.
-fn loop_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool, parallel: bool) {
+fn loop_subdivide_once<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    preserve_boundary: bool,
+    parallel: bool,
+) {
     let (vertices, faces) = to_face_vertex(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
@@ -80,8 +84,13 @@ fn loop_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_bounda
         compute_updated_vertices(&vertices, &faces, &edge_info, preserve_boundary, parallel);
 
     // Build the subdivided mesh (parallel)
-    let (new_vertices, new_faces) =
-        build_subdivided_mesh(&updated_vertices, &edge_vertices, &faces, &edge_info, parallel);
+    let (new_vertices, new_faces) = build_subdivided_mesh(
+        &updated_vertices,
+        &edge_vertices,
+        &faces,
+        &edge_info,
+        parallel,
+    );
 
     // Rebuild the half-edge mesh
     if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &new_faces) {
@@ -150,7 +159,7 @@ fn compute_edge_vertices(
     let edges: Vec<_> = edge_info.iter().collect();
     let num_edges = edges.len();
 
-    let compute_edge = |idx: usize| -> (usize, Point3<f64>)  {
+    let compute_edge = |idx: usize| -> (usize, Point3<f64>) {
         let (&(v0, v1), info) = edges[idx];
         let p0 = &vertices[v0];
         let p1 = &vertices[v1];
@@ -224,9 +233,7 @@ fn compute_updated_vertices(
                 let beta = compute_loop_beta(n_neighbors);
                 let neighbor_sum: Vector3<f64> =
                     neighbors[i].iter().map(|&j| vertices[j].coords).sum();
-                Point3::from(
-                    pos.coords * (1.0 - n_neighbors as f64 * beta) + neighbor_sum * beta,
-                )
+                Point3::from(pos.coords * (1.0 - n_neighbors as f64 * beta) + neighbor_sum * beta)
             }
         }
     };
@@ -340,9 +347,7 @@ fn build_subdivided_mesh(
             .map(build_face_set)
             .collect()
     } else {
-        (0..original_faces.len())
-            .map(build_face_set)
-            .collect()
+        (0..original_faces.len()).map(build_face_set).collect()
     };
 
     // Flatten into final face list
@@ -431,16 +436,19 @@ mod tests {
     #[test]
     fn test_loop_subdivide_preserves_euler() {
         let mut mesh = create_tetrahedron();
-        let original_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let original_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
         let options = SubdivideOptions::new(1);
         loop_subdivide(&mut mesh, &options);
 
-        let new_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
-        assert_eq!(original_euler, new_euler, "Euler characteristic should be preserved");
+        assert_eq!(
+            original_euler, new_euler,
+            "Euler characteristic should be preserved"
+        );
     }
 
     #[test]
@@ -489,9 +497,11 @@ mod tests {
         // Compute original centroid
         let original_positions: Vec<Point3<f64>> =
             mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
-        let original_centroid: Vector3<f64> =
-            original_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
-                / original_positions.len() as f64;
+        let original_centroid: Vector3<f64> = original_positions
+            .iter()
+            .map(|p| p.coords)
+            .sum::<Vector3<f64>>()
+            / original_positions.len() as f64;
 
         let options = SubdivideOptions::new(2);
         loop_subdivide(&mut mesh, &options);
@@ -499,8 +509,9 @@ mod tests {
         // Compute new centroid
         let new_positions: Vec<Point3<f64>> =
             mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
-        let new_centroid: Vector3<f64> = new_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
-            / new_positions.len() as f64;
+        let new_centroid: Vector3<f64> =
+            new_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
+                / new_positions.len() as f64;
 
         // Centroids should be similar (subdivision doesn't drift the center much)
         assert!((new_centroid - original_centroid).norm() < 0.1);

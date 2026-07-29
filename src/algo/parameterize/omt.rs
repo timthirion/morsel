@@ -955,8 +955,8 @@ pub fn compute_area_distortion<I: MeshIndex>(
         let uv2 = uvs.get(v2);
 
         // 2D signed area
-        let area_uv = 0.5
-            * ((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y)).abs();
+        let area_uv =
+            0.5 * ((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y)).abs();
 
         total_3d_area += area_3d;
         total_uv_area += area_uv;
@@ -980,8 +980,8 @@ pub fn compute_area_distortion<I: MeshIndex>(
         let uv1 = uvs.get(v1);
         let uv2 = uvs.get(v2);
 
-        let area_uv = 0.5
-            * ((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y)).abs();
+        let area_uv =
+            0.5 * ((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y)).abs();
 
         let expected_uv_area = area_3d * scale;
         if expected_uv_area > 1e-12 {
@@ -1007,7 +1007,6 @@ pub fn compute_area_distortion<I: MeshIndex>(
 
     (min_ratio, max_ratio, rms_error)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1148,9 +1147,7 @@ mod tests {
         let n = positions.len();
 
         // Zero weights (a plain Voronoi diagram), then a deliberately uneven set.
-        let uneven: Vec<f64> = (0..n)
-            .map(|i| 0.002 * ((i % 7) as f64 - 3.0))
-            .collect();
+        let uneven: Vec<f64> = (0..n).map(|i| 0.002 * ((i % 7) as f64 - 3.0)).collect();
 
         for (label, weights) in [("zero", vec![0.0; n]), ("uneven", uneven)] {
             let cells = domain.power_cells(&positions, &weights);

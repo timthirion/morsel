@@ -144,7 +144,12 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
         flip_edges_to_improve_valence(mesh, options.preserve_boundary);
 
         for _ in 0..options.smoothing_iterations {
-            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary, options.parallel);
+            tangential_smooth(
+                mesh,
+                options.smoothing_lambda,
+                options.preserve_boundary,
+                options.parallel,
+            );
         }
 
         let _ = sizing;
@@ -152,7 +157,11 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
 
     // Report completion
     if let Some(p) = progress {
-        p.report(options.iterations, options.iterations, "Anisotropic remeshing complete");
+        p.report(
+            options.iterations,
+            options.iterations,
+            "Anisotropic remeshing complete",
+        );
     }
 }
 
@@ -466,7 +475,10 @@ fn can_collapse_edge_anisotropic(
 }
 
 /// Flip edges to improve vertex valence.
-fn flip_edges_to_improve_valence<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool) {
+fn flip_edges_to_improve_valence<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    preserve_boundary: bool,
+) {
     let (vertices, mut faces) = to_face_vertex(mesh);
 
     flip_edges_for_valence_faces(&vertices, &mut faces, preserve_boundary);
@@ -551,14 +563,14 @@ mod tests {
     #[test]
     fn test_anisotropic_remesh_preserves_euler() {
         let mut mesh = create_tetrahedron();
-        let original_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let original_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
         let options = AnisotropicOptions::new(0.3, 0.8).with_iterations(2);
         anisotropic_remesh(&mut mesh, &options);
 
-        let new_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
         assert_eq!(original_euler, new_euler);
     }

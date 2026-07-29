@@ -354,15 +354,14 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
 
     /// Iterate over faces adjacent to a vertex.
     pub fn vertex_faces(&self, v: VertexId<I>) -> impl Iterator<Item = FaceId<I>> + '_ {
-        self.vertex_halfedges(v)
-            .filter_map(|he| {
-                let f = self.face_of(he);
-                if f.is_valid() {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
+        self.vertex_halfedges(v).filter_map(|he| {
+            let f = self.face_of(he);
+            if f.is_valid() {
+                Some(f)
+            } else {
+                None
+            }
+        })
     }
 
     /// Iterate over half-edges around a face.

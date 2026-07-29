@@ -561,7 +561,9 @@ impl PinnedReduction {
         let mut reduced_triplets = Vec::with_capacity(triplets.len());
 
         for &(row, col, value) in triplets {
-            let Some(r) = reduced_index[row] else { continue };
+            let Some(r) = reduced_index[row] else {
+                continue;
+            };
             match reduced_index[col] {
                 Some(c) => reduced_triplets.push((r, c, value)),
                 None => column_acc[r] += value,

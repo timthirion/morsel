@@ -30,16 +30,21 @@ pub fn load<P: AsRef<Path>, I: MeshIndex>(path: P) -> Result<HalfEdgeMesh<I>> {
     let mut reader = BufReader::new(file);
 
     let parser = Parser::<DefaultElement>::new();
-    let ply = parser.read_ply(&mut reader).map_err(|e| MeshError::LoadError {
-        path: path.to_path_buf(),
-        message: e.to_string(),
-    })?;
+    let ply = parser
+        .read_ply(&mut reader)
+        .map_err(|e| MeshError::LoadError {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
 
     // Extract vertices
-    let vertex_element = ply.payload.get("vertex").ok_or_else(|| MeshError::LoadError {
-        path: path.to_path_buf(),
-        message: "PLY file has no vertex element".to_string(),
-    })?;
+    let vertex_element = ply
+        .payload
+        .get("vertex")
+        .ok_or_else(|| MeshError::LoadError {
+            path: path.to_path_buf(),
+            message: "PLY file has no vertex element".to_string(),
+        })?;
 
     let mut vertices: Vec<Point3<f64>> = Vec::with_capacity(vertex_element.len());
     for vertex in vertex_element {
@@ -59,10 +64,13 @@ pub fn load<P: AsRef<Path>, I: MeshIndex>(path: P) -> Result<HalfEdgeMesh<I>> {
     }
 
     // Extract faces
-    let face_element = ply.payload.get("face").ok_or_else(|| MeshError::LoadError {
-        path: path.to_path_buf(),
-        message: "PLY file has no face element".to_string(),
-    })?;
+    let face_element = ply
+        .payload
+        .get("face")
+        .ok_or_else(|| MeshError::LoadError {
+            path: path.to_path_buf(),
+            message: "PLY file has no face element".to_string(),
+        })?;
 
     let mut faces: Vec<[usize; 3]> = Vec::with_capacity(face_element.len());
     for face in face_element {

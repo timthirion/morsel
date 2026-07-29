@@ -1,7 +1,7 @@
 //! Quadric Error Metrics (QEM) decimation.
 
-use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use nalgebra::{Matrix4, Point3, Vector4};
 use rayon::prelude::*;
@@ -37,16 +37,16 @@ impl Quadric {
     fn from_plane(a: f64, b: f64, c: f64, d: f64) -> Self {
         Self {
             data: [
-                a * a,     // [0,0]
-                a * b,     // [0,1] = [1,0]
-                a * c,     // [0,2] = [2,0]
-                a * d,     // [0,3] = [3,0]
-                b * b,     // [1,1]
-                b * c,     // [1,2] = [2,1]
-                b * d,     // [1,3] = [3,1]
-                c * c,     // [2,2]
-                c * d,     // [2,3] = [3,2]
-                d * d,     // [3,3]
+                a * a, // [0,0]
+                a * b, // [0,1] = [1,0]
+                a * c, // [0,2] = [2,0]
+                a * d, // [0,3] = [3,0]
+                b * b, // [1,1]
+                b * c, // [1,2] = [2,1]
+                b * d, // [1,3] = [3,1]
+                c * c, // [2,2]
+                c * d, // [2,3] = [3,2]
+                d * d, // [3,3]
             ],
         }
     }
@@ -81,10 +81,22 @@ impl Quadric {
     /// Convert to a 4x4 matrix for solving the optimal point.
     fn to_matrix(&self) -> Matrix4<f64> {
         Matrix4::new(
-            self.data[0], self.data[1], self.data[2], self.data[3],
-            self.data[1], self.data[4], self.data[5], self.data[6],
-            self.data[2], self.data[5], self.data[7], self.data[8],
-            self.data[3], self.data[6], self.data[8], self.data[9],
+            self.data[0],
+            self.data[1],
+            self.data[2],
+            self.data[3],
+            self.data[1],
+            self.data[4],
+            self.data[5],
+            self.data[6],
+            self.data[2],
+            self.data[5],
+            self.data[7],
+            self.data[8],
+            self.data[3],
+            self.data[6],
+            self.data[8],
+            self.data[9],
         )
     }
 
@@ -164,7 +176,10 @@ impl PartialOrd for EdgeCandidate {
 impl Ord for EdgeCandidate {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap
-        other.error.partial_cmp(&self.error).unwrap_or(Ordering::Equal)
+        other
+            .error
+            .partial_cmp(&self.error)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -291,16 +306,12 @@ fn decimate_mesh(
     let candidates: Vec<EdgeCandidate> = if parallel {
         edge_list
             .par_iter()
-            .filter_map(|&(v0, v1)| {
-                create_edge_candidate(v0, v1, &vertices, &quadrics, 0)
-            })
+            .filter_map(|&(v0, v1)| create_edge_candidate(v0, v1, &vertices, &quadrics, 0))
             .collect()
     } else {
         edge_list
             .iter()
-            .filter_map(|&(v0, v1)| {
-                create_edge_candidate(v0, v1, &vertices, &quadrics, 0)
-            })
+            .filter_map(|&(v0, v1)| create_edge_candidate(v0, v1, &vertices, &quadrics, 0))
             .collect()
     };
 
@@ -795,11 +806,7 @@ fn is_collapse_valid(
 }
 
 /// Get all neighboring vertices of a vertex.
-fn get_vertex_neighbors(
-    v: usize,
-    faces: &[[usize; 3]],
-    valid_faces: &[bool],
-) -> HashSet<usize> {
+fn get_vertex_neighbors(v: usize, faces: &[[usize; 3]], valid_faces: &[bool]) -> HashSet<usize> {
     let mut neighbors = HashSet::new();
 
     for (fi, face) in faces.iter().enumerate() {

@@ -270,10 +270,7 @@ fn compute_normalized_gradient<I: MeshIndex>(
 }
 
 /// Compute the integrated divergence of the vector field at each vertex.
-fn compute_divergence<I: MeshIndex>(
-    mesh: &HalfEdgeMesh<I>,
-    x: &[Vector3<f64>],
-) -> DVector<f64> {
+fn compute_divergence<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, x: &[Vector3<f64>]) -> DVector<f64> {
     let n = mesh.num_vertices();
     let mut div = DVector::zeros(n);
 
@@ -501,8 +498,7 @@ mod tests {
 
         // Sources at opposite corners
         let sources = vec![VertexId::new(0), VertexId::new(8)];
-        let result =
-            heat_method_multiple(&mesh, &sources, &HeatMethodOptions::default()).unwrap();
+        let result = heat_method_multiple(&mesh, &sources, &HeatMethodOptions::default()).unwrap();
 
         // Both sources should have distance ~0
         assert!(result.distance(VertexId::new(0)) < 1e-6);

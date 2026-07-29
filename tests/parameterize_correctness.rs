@@ -10,8 +10,7 @@
 //! here as a distortion that grew instead of staying at zero.
 
 use morsel::algo::parameterize::{
-    arap, compute_area_distortion, lscm, omt, omt_with_report, ARAPOptions, LSCMOptions,
-    OMTOptions,
+    arap, compute_area_distortion, lscm, omt, omt_with_report, ARAPOptions, LSCMOptions, OMTOptions,
 };
 use morsel::mesh::{build_from_triangles, HalfEdgeMesh};
 use nalgebra::Point3;

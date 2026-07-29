@@ -8,8 +8,7 @@ use morsel::mesh::HalfEdgeMesh;
 
 fn main() {
     // Load the bunny
-    let mesh: HalfEdgeMesh =
-        io::load("examples/stanford-bunny.obj").expect("Failed to load bunny");
+    let mesh: HalfEdgeMesh = io::load("examples/stanford-bunny.obj").expect("Failed to load bunny");
     println!(
         "Loaded mesh: {} vertices, {} faces",
         mesh.num_vertices(),

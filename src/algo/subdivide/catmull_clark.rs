@@ -37,7 +37,10 @@ use super::SubdivideOptions;
 ///   - R = average of adjacent edge midpoints
 ///   - S = original position
 ///   - n = valence
-pub fn catmull_clark_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SubdivideOptions) {
+pub fn catmull_clark_subdivide<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+) {
     if options.iterations == 0 {
         return;
     }
@@ -61,11 +64,19 @@ pub fn catmull_clark_subdivide_with_progress<I: MeshIndex>(
         progress.report(iter, options.iterations, "Catmull-Clark subdivision");
         catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
-    progress.report(options.iterations, options.iterations, "Catmull-Clark subdivision");
+    progress.report(
+        options.iterations,
+        options.iterations,
+        "Catmull-Clark subdivision",
+    );
 }
 
 /// Perform one iteration of Catmull-Clark subdivision.
-fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool, parallel: bool) {
+fn catmull_clark_subdivide_once<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    preserve_boundary: bool,
+    parallel: bool,
+) {
     let (vertices, faces) = to_face_vertex_quads(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
@@ -93,7 +104,13 @@ fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preser
 
     // Step 2: Build edge information and compute edge points
     let edge_info = build_quad_edge_info(&faces);
-    let edge_points = compute_cc_edge_points(&vertices, &face_points, &edge_info, preserve_boundary, parallel);
+    let edge_points = compute_cc_edge_points(
+        &vertices,
+        &face_points,
+        &edge_info,
+        preserve_boundary,
+        parallel,
+    );
 
     // Step 3: Compute updated vertex positions
     let updated_vertices = compute_cc_vertex_points(
@@ -106,8 +123,14 @@ fn catmull_clark_subdivide_once<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preser
     );
 
     // Step 4: Build the subdivided quad mesh
-    let (new_vertices, new_faces) =
-        build_cc_subdivided_mesh(&updated_vertices, &face_points, &edge_points, &faces, &edge_info, parallel);
+    let (new_vertices, new_faces) = build_cc_subdivided_mesh(
+        &updated_vertices,
+        &face_points,
+        &edge_points,
+        &faces,
+        &edge_info,
+        parallel,
+    );
 
     // Rebuild the half-edge mesh
     if let Ok(new_mesh) = build_from_quads::<I>(&new_vertices, &new_faces) {
@@ -340,9 +363,7 @@ fn build_cc_subdivided_mesh(
             .map(build_face_set)
             .collect()
     } else {
-        (0..original_faces.len())
-            .map(build_face_set)
-            .collect()
+        (0..original_faces.len()).map(build_face_set).collect()
     };
 
     let new_faces: Vec<[usize; 4]> = face_sets.into_iter().flatten().collect();
@@ -465,16 +486,19 @@ mod tests {
     #[test]
     fn test_catmull_clark_preserves_euler() {
         let mut mesh = create_quad_cube();
-        let original_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let original_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
         let options = SubdivideOptions::new(1);
         catmull_clark_subdivide(&mut mesh, &options);
 
-        let new_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
-        assert_eq!(original_euler, new_euler, "Euler characteristic should be preserved");
+        assert_eq!(
+            original_euler, new_euler,
+            "Euler characteristic should be preserved"
+        );
     }
 
     #[test]
@@ -498,9 +522,11 @@ mod tests {
         // Compute original centroid
         let original_positions: Vec<Point3<f64>> =
             mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
-        let original_centroid: Vector3<f64> =
-            original_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
-                / original_positions.len() as f64;
+        let original_centroid: Vector3<f64> = original_positions
+            .iter()
+            .map(|p| p.coords)
+            .sum::<Vector3<f64>>()
+            / original_positions.len() as f64;
 
         let options = SubdivideOptions::new(2);
         catmull_clark_subdivide(&mut mesh, &options);
@@ -508,8 +534,9 @@ mod tests {
         // Compute new centroid
         let new_positions: Vec<Point3<f64>> =
             mesh.vertex_ids().map(|v| *mesh.position(v)).collect();
-        let new_centroid: Vector3<f64> = new_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
-            / new_positions.len() as f64;
+        let new_centroid: Vector3<f64> =
+            new_positions.iter().map(|p| p.coords).sum::<Vector3<f64>>()
+                / new_positions.len() as f64;
 
         // Centroids should be similar (subdivision doesn't drift the center much)
         assert!((new_centroid - original_centroid).norm() < 0.1);

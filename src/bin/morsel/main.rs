@@ -12,9 +12,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use morsel::algo::{
-    curvature, decimate, parameterize, remesh, smooth, subdivide, Progress,
-};
+use morsel::algo::{curvature, decimate, parameterize, remesh, smooth, subdivide, Progress};
 use morsel::io;
 use morsel::mesh::HalfEdgeMesh;
 
@@ -218,7 +216,10 @@ fn main() {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
-        Commands::Info { input, curvature: show_curvature } => {
+        Commands::Info {
+            input,
+            curvature: show_curvature,
+        } => {
             cmd_info(&input, show_curvature)?;
         }
 
@@ -231,7 +232,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             move_boundary,
             sequential,
         } => {
-            cmd_smooth(&input, &output, method, iterations, lambda, move_boundary, sequential)?;
+            cmd_smooth(
+                &input,
+                &output,
+                method,
+                iterations,
+                lambda,
+                move_boundary,
+                sequential,
+            )?;
         }
 
         Commands::Subdivide {
@@ -272,7 +281,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             iterations,
             sequential,
         } => {
-            cmd_remesh(&input, &output, method, target_length, iterations, sequential)?;
+            cmd_remesh(
+                &input,
+                &output,
+                method,
+                target_length,
+                iterations,
+                sequential,
+            )?;
         }
     }
 
@@ -365,8 +381,10 @@ fn cmd_info(input: &PathBuf, show_curvature: bool) -> Result<(), Box<dyn std::er
 
     // Bounding box
     if let Some((min, max)) = mesh.bounding_box() {
-        println!("Bounding box: ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})",
-            min.x, min.y, min.z, max.x, max.y, max.z);
+        println!(
+            "Bounding box: ({:.3}, {:.3}, {:.3}) to ({:.3}, {:.3}, {:.3})",
+            min.x, min.y, min.z, max.x, max.y, max.z
+        );
         let diag = max - min;
         println!("Dimensions: {:.3} x {:.3} x {:.3}", diag.x, diag.y, diag.z);
     }
@@ -385,13 +403,17 @@ fn cmd_info(input: &PathBuf, show_curvature: bool) -> Result<(), Box<dyn std::er
     }
 
     // Boundary info
-    let boundary_verts: Vec<_> = mesh.vertex_ids()
+    let boundary_verts: Vec<_> = mesh
+        .vertex_ids()
         .filter(|&v| mesh.is_boundary_vertex(v))
         .collect();
     if boundary_verts.is_empty() {
         println!("Topology: Closed (no boundary)");
     } else {
-        println!("Topology: Open ({} boundary vertices)", boundary_verts.len());
+        println!(
+            "Topology: Open ({} boundary vertices)",
+            boundary_verts.len()
+        );
     }
 
     // Curvature statistics
@@ -410,13 +432,22 @@ fn cmd_info(input: &PathBuf, show_curvature: bool) -> Result<(), Box<dyn std::er
         let m_max = mean.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let m_avg: f64 = mean.iter().sum::<f64>() / mean.len() as f64;
 
-        println!("  Gaussian: min={:.4}, max={:.4}, avg={:.4}", g_min, g_max, g_avg);
-        println!("  Mean:     min={:.4}, max={:.4}, avg={:.4}", m_min, m_max, m_avg);
+        println!(
+            "  Gaussian: min={:.4}, max={:.4}, avg={:.4}",
+            g_min, g_max, g_avg
+        );
+        println!(
+            "  Mean:     min={:.4}, max={:.4}, avg={:.4}",
+            m_min, m_max, m_avg
+        );
 
         // Gauss-Bonnet check
         let total_gaussian: f64 = gaussian.iter().sum();
         let euler_from_curv = total_gaussian / (2.0 * std::f64::consts::PI);
-        println!("  Gauss-Bonnet Euler characteristic: {:.2}", euler_from_curv);
+        println!(
+            "  Gauss-Bonnet Euler characteristic: {:.2}",
+            euler_from_curv
+        );
     }
 
     Ok(())
@@ -433,7 +464,11 @@ fn cmd_smooth(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
-    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
 
     let options = smooth::SmoothOptions {
         iterations,
@@ -448,15 +483,24 @@ fn cmd_smooth(
     let start = Instant::now();
     match method {
         SmoothMethod::Laplacian => {
-            println!("Applying Laplacian smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
+            println!(
+                "Applying Laplacian smoothing ({} iterations, lambda={}, {})...",
+                iterations, lambda, mode
+            );
             smooth::laplacian_smooth_with_progress(&mut mesh, &options, &progress);
         }
         SmoothMethod::Taubin => {
-            println!("Applying Taubin smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
+            println!(
+                "Applying Taubin smoothing ({} iterations, lambda={}, {})...",
+                iterations, lambda, mode
+            );
             smooth::taubin_smooth_with_progress(&mut mesh, &options, &progress);
         }
         SmoothMethod::Cotangent => {
-            println!("Applying cotangent smoothing ({} iterations, lambda={}, {})...", iterations, lambda, mode);
+            println!(
+                "Applying cotangent smoothing ({} iterations, lambda={}, {})...",
+                iterations, lambda, mode
+            );
             smooth::cotangent_smooth_with_progress(&mut mesh, &options, &progress);
         }
     }
@@ -477,7 +521,11 @@ fn cmd_subdivide(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
-    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
 
     let options = subdivide::SubdivideOptions::new(iterations).with_parallel(!sequential);
     let mode = if sequential { "sequential" } else { "parallel" };
@@ -486,17 +534,27 @@ fn cmd_subdivide(
     let start = Instant::now();
     match method {
         SubdivideMethod::Loop => {
-            println!("Applying Loop subdivision ({} iterations, {})...", iterations, mode);
+            println!(
+                "Applying Loop subdivision ({} iterations, {})...",
+                iterations, mode
+            );
             subdivide::loop_subdivide_with_progress(&mut mesh, &options, &progress);
         }
         SubdivideMethod::CatmullClark => {
-            println!("Applying Catmull-Clark subdivision ({} iterations, {})...", iterations, mode);
+            println!(
+                "Applying Catmull-Clark subdivision ({} iterations, {})...",
+                iterations, mode
+            );
             subdivide::catmull_clark_subdivide_with_progress(&mut mesh, &options, &progress);
         }
     }
     let elapsed = start.elapsed();
 
-    println!("Result: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Result: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
@@ -513,7 +571,11 @@ fn cmd_decimate(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
-    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
 
     let mode = if sequential { "sequential" } else { "parallel" };
     let options = if let Some(target_faces) = faces {
@@ -534,7 +596,11 @@ fn cmd_decimate(
     decimate::qem_decimate_with_progress(&mut mesh, &options, &progress);
     let elapsed = start.elapsed();
 
-    println!("Result: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Result: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
@@ -551,7 +617,11 @@ fn cmd_remesh(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut mesh: HalfEdgeMesh = io::load(input)?;
 
-    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
 
     let avg_edge = remesh::average_edge_length(&mesh);
     let target = target_length.unwrap_or(avg_edge);
@@ -565,7 +635,10 @@ fn cmd_remesh(
     let start = Instant::now();
     match method {
         RemeshMethod::Isotropic => {
-            println!("Applying isotropic remeshing ({} iterations, {})...", iterations, mode);
+            println!(
+                "Applying isotropic remeshing ({} iterations, {})...",
+                iterations, mode
+            );
             let options = remesh::RemeshOptions::with_target_length(target)
                 .with_iterations(iterations)
                 .with_parallel(!sequential);
@@ -575,8 +648,12 @@ fn cmd_remesh(
     let elapsed = start.elapsed();
 
     let new_avg = remesh::average_edge_length(&mesh);
-    println!("Result: {} vertices, {} faces (avg edge: {:.6})",
-        mesh.num_vertices(), mesh.num_faces(), new_avg);
+    println!(
+        "Result: {} vertices, {} faces (avg edge: {:.6})",
+        mesh.num_vertices(),
+        mesh.num_faces(),
+        new_avg
+    );
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
@@ -592,7 +669,11 @@ fn cmd_parameterize(
     use morsel::io::obj as obj_io;
 
     let mesh: HalfEdgeMesh = io::load(input)?;
-    println!("Loaded: {} vertices, {} faces", mesh.num_vertices(), mesh.num_faces());
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
 
     // Every method except cylindrical projection solves over a UV domain
     // pinned to the boundary, so a closed mesh has to be cut first.
@@ -602,9 +683,11 @@ fn cmd_parameterize(
             .filter(|&v| mesh.is_boundary_vertex(v))
             .count();
         if boundary_count == 0 {
-            return Err("Mesh has no boundary; this method requires disk topology (open mesh). \
+            return Err(
+                "Mesh has no boundary; this method requires disk topology (open mesh). \
                         Cut the mesh first, or use `--method cylindrical`."
-                .into());
+                    .into(),
+            );
         }
         println!("Boundary vertices: {}", boundary_count);
     }

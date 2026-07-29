@@ -11,7 +11,9 @@ use std::hash::Hash;
 ///
 /// This trait is implemented for `u16`, `u32`, and `u64`, allowing users to choose
 /// the appropriate index size for their mesh.
-pub trait MeshIndex: Copy + Clone + Eq + PartialEq + Ord + PartialOrd + Hash + Debug + Send + Sync + 'static {
+pub trait MeshIndex:
+    Copy + Clone + Eq + PartialEq + Ord + PartialOrd + Hash + Debug + Send + Sync + 'static
+{
     /// The maximum valid index value.
     const MAX: Self;
 

@@ -99,7 +99,7 @@ impl App {
             camera: OrbitCamera::default(),
             wireframe: false,
             backface_culling,
-            textured: true, // Enabled by default when texture is available
+            textured: true,    // Enabled by default when texture is available
             show_colors: true, // Show vertex colors by default
             mouse_pressed: false,
             last_mouse_pos: None,
@@ -336,7 +336,14 @@ impl ApplicationHandler for App {
                 if let (Some(ref mut renderer), Some(ref gpu_mesh)) =
                     (&mut self.renderer, &self.gpu_mesh)
                 {
-                    match renderer.render(gpu_mesh, &self.camera, self.wireframe, self.backface_culling, self.textured, self.show_colors) {
+                    match renderer.render(
+                        gpu_mesh,
+                        &self.camera,
+                        self.wireframe,
+                        self.backface_culling,
+                        self.textured,
+                        self.show_colors,
+                    ) {
                         Ok(_) => {}
                         Err(wgpu::SurfaceError::Lost) => {
                             if let Some(ref window) = self.window {
@@ -378,7 +385,9 @@ fn main() {
         eprintln!("Options:");
         eprintln!("  --texture <file>       Load a texture image (PNG, JPG, etc.)");
         eprintln!("  --parameterize         Compute UV coordinates (cylindrical projection)");
-        eprintln!("  --curvature <type>     Visualize curvature as vertex colors (mean or gaussian)");
+        eprintln!(
+            "  --curvature <type>     Visualize curvature as vertex colors (mean or gaussian)"
+        );
         eprintln!();
         eprintln!("Supported mesh formats: .obj, .stl, .ply, .gltf, .glb");
         eprintln!();
@@ -423,7 +432,10 @@ fn main() {
                         "mean" => Some(CurvatureType::Mean),
                         "gaussian" => Some(CurvatureType::Gaussian),
                         other => {
-                            eprintln!("Error: --curvature requires 'mean' or 'gaussian', got '{}'", other);
+                            eprintln!(
+                                "Error: --curvature requires 'mean' or 'gaussian', got '{}'",
+                                other
+                            );
                             std::process::exit(1);
                         }
                     };
@@ -531,21 +543,15 @@ fn curvature_to_color(value: f64, min: f64, max: f64) -> [f32; 3] {
 /// Smooth per-vertex values using Laplacian smoothing.
 ///
 /// Each vertex's value is averaged with its neighbors' values.
-fn smooth_vertex_values(
-    mesh: &HalfEdgeMesh,
-    values: &[f64],
-    iterations: usize,
-) -> Vec<f64> {
+fn smooth_vertex_values(mesh: &HalfEdgeMesh, values: &[f64], iterations: usize) -> Vec<f64> {
     let mut current = values.to_vec();
     let mut next = vec![0.0; values.len()];
 
     for _ in 0..iterations {
         for vid in mesh.vertex_ids() {
             let idx = vid.index();
-            let neighbor_indices: Vec<usize> = mesh
-                .vertex_neighbors(vid)
-                .map(|n| n.index())
-                .collect();
+            let neighbor_indices: Vec<usize> =
+                mesh.vertex_neighbors(vid).map(|n| n.index()).collect();
 
             if neighbor_indices.is_empty() {
                 next[idx] = current[idx];

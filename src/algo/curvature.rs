@@ -357,7 +357,10 @@ pub fn gaussian_curvature_sequential<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> Ve
     gaussian_curvature_impl(mesh, false)
 }
 
-fn gaussian_curvature_impl<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>, parallel: bool) -> Vec<f64> {
+fn gaussian_curvature_impl<I: MeshIndex + Sync>(
+    mesh: &HalfEdgeMesh<I>,
+    parallel: bool,
+) -> Vec<f64> {
     let n = mesh.num_vertices();
     let vertex_indices: Vec<usize> = (0..n).collect();
 
@@ -785,12 +788,7 @@ mod tests {
             );
 
             // k1 >= k2
-            assert!(
-                k1 >= k2 - 1e-10,
-                "k1 should be >= k2: {} vs {}",
-                k1,
-                k2
-            );
+            assert!(k1 >= k2 - 1e-10, "k1 should be >= k2: {} vs {}", k1, k2);
         }
     }
 

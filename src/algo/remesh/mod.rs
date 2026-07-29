@@ -329,7 +329,11 @@ pub(crate) fn cleanup_mesh(
         } else {
             2
         };
-        let normalized = [face[min_idx], face[(min_idx + 1) % 3], face[(min_idx + 2) % 3]];
+        let normalized = [
+            face[min_idx],
+            face[(min_idx + 1) % 3],
+            face[(min_idx + 2) % 3],
+        ];
         if seen_faces.insert(normalized) {
             unique_faces.push(face);
         }
@@ -592,7 +596,13 @@ pub(crate) fn flip_edges_for_valence_faces(
         if edges_to_flip.is_empty() {
             // All candidates conflict, try single flip
             let topology = MeshTopology::from_faces(faces, vertices.len());
-            let edge = find_edge_to_flip_fast(vertices, faces, &topology, preserve_boundary, &failed_edges);
+            let edge = find_edge_to_flip_fast(
+                vertices,
+                faces,
+                &topology,
+                preserve_boundary,
+                &failed_edges,
+            );
 
             match edge {
                 Some((v0, v1)) => {
@@ -759,12 +769,7 @@ fn should_flip_edge_fast(
 }
 
 /// Check if a quad is convex.
-fn is_convex_quad(
-    p0: &Point3<f64>,
-    p1: &Point3<f64>,
-    p2: &Point3<f64>,
-    p3: &Point3<f64>,
-) -> bool {
+fn is_convex_quad(p0: &Point3<f64>, p1: &Point3<f64>, p2: &Point3<f64>, p3: &Point3<f64>) -> bool {
     let v01 = p1 - p0;
     let v12 = p2 - p1;
     let v23 = p3 - p2;
@@ -871,9 +876,7 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
             .map(compute_position)
             .collect()
     } else {
-        (0..vertices.len())
-            .map(compute_position)
-            .collect()
+        (0..vertices.len()).map(compute_position).collect()
     };
 
     if let Ok(new_mesh) = build_from_triangles::<I>(&new_positions, &faces) {
@@ -988,17 +991,12 @@ pub(crate) fn compute_boundary_vertices(
             .map(is_boundary_vertex)
             .collect()
     } else {
-        (0..num_vertices)
-            .map(is_boundary_vertex)
-            .collect()
+        (0..num_vertices).map(is_boundary_vertex).collect()
     }
 }
 
 /// Build adjacency list from faces.
-pub(crate) fn build_vertex_neighbors(
-    faces: &[[usize; 3]],
-    num_vertices: usize,
-) -> Vec<Vec<usize>> {
+pub(crate) fn build_vertex_neighbors(faces: &[[usize; 3]], num_vertices: usize) -> Vec<Vec<usize>> {
     let mut neighbors: Vec<HashSet<usize>> = vec![HashSet::new(); num_vertices];
 
     for face in faces {

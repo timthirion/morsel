@@ -9,8 +9,8 @@ use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex}
 
 use super::{
     cleanup_mesh, collapse_edge, flip_edges_for_valence_faces, get_vertex_neighbors,
-    is_boundary_edge_in_faces, is_boundary_vertex_in_faces, tangential_smooth,
-    validate_face_list, MeshTopology,
+    is_boundary_edge_in_faces, is_boundary_vertex_in_faces, tangential_smooth, validate_face_list,
+    MeshTopology,
 };
 
 /// Options for isotropic remeshing.
@@ -129,10 +129,25 @@ fn isotropic_remesh_internal<I: MeshIndex>(
         let base_step = iter * 4;
 
         // Step 1: Split long edges (with sub-progress)
-        split_long_edges_with_progress(mesh, high, options.preserve_boundary, progress, base_step, total_steps);
+        split_long_edges_with_progress(
+            mesh,
+            high,
+            options.preserve_boundary,
+            progress,
+            base_step,
+            total_steps,
+        );
 
         // Step 2: Collapse short edges (with sub-progress)
-        collapse_short_edges_with_progress(mesh, low, high, options.preserve_boundary, progress, base_step + 1, total_steps);
+        collapse_short_edges_with_progress(
+            mesh,
+            low,
+            high,
+            options.preserve_boundary,
+            progress,
+            base_step + 1,
+            total_steps,
+        );
 
         #[cfg(debug_assertions)]
         {
@@ -152,7 +167,12 @@ fn isotropic_remesh_internal<I: MeshIndex>(
             p.report(base_step + 3, total_steps, "Smoothing");
         }
         for _ in 0..options.smoothing_iterations {
-            tangential_smooth(mesh, options.smoothing_lambda, options.preserve_boundary, options.parallel);
+            tangential_smooth(
+                mesh,
+                options.smoothing_lambda,
+                options.preserve_boundary,
+                options.parallel,
+            );
         }
     }
 
@@ -259,7 +279,13 @@ fn split_long_edges_with_progress<I: MeshIndex>(
 
         // Report progress
         if let Some(p) = progress {
-            p.report_sub(iteration + 1, max_iterations, step, total_steps, "Splitting edges");
+            p.report_sub(
+                iteration + 1,
+                max_iterations,
+                step,
+                total_steps,
+                "Splitting edges",
+            );
         }
 
         // Sort by length descending
@@ -369,7 +395,11 @@ fn split_long_edges_with_progress<I: MeshIndex>(
     }
 
     #[cfg(debug_assertions)]
-    eprintln!("Split phase done: {} faces, {} vertices. Building mesh...", faces.len(), vertices.len());
+    eprintln!(
+        "Split phase done: {} faces, {} vertices. Building mesh...",
+        faces.len(),
+        vertices.len()
+    );
 
     if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
         *mesh = new_mesh;
@@ -378,7 +408,6 @@ fn split_long_edges_with_progress<I: MeshIndex>(
     #[cfg(debug_assertions)]
     eprintln!("Split phase: mesh built");
 }
-
 
 /// Collapse all edges shorter than the threshold (with progress reporting).
 ///
@@ -400,7 +429,12 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
 
     for iteration in 0..max_iterations {
         #[cfg(debug_assertions)]
-        eprintln!("Collapse iter {}: {} faces, {} vertices", iteration, faces.len(), vertices.len());
+        eprintln!(
+            "Collapse iter {}: {} faces, {} vertices",
+            iteration,
+            faces.len(),
+            vertices.len()
+        );
 
         // Build topology once per batch
         let topology = MeshTopology::from_faces(&faces, vertices.len());
@@ -456,7 +490,13 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
 
         // Report progress
         if let Some(p) = progress {
-            p.report_sub(iteration + 1, max_iterations, step, total_steps, "Collapsing edges");
+            p.report_sub(
+                iteration + 1,
+                max_iterations,
+                step,
+                total_steps,
+                "Collapsing edges",
+            );
         }
     }
 
@@ -469,7 +509,11 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
 
     #[cfg(debug_assertions)]
     {
-        eprintln!("Collapse done. Building mesh from {} faces, {} vertices", clean_faces.len(), clean_vertices.len());
+        eprintln!(
+            "Collapse done. Building mesh from {} faces, {} vertices",
+            clean_faces.len(),
+            clean_vertices.len()
+        );
         // Check for degenerate faces
         let mut degenerate = 0;
         for face in &clean_faces {
@@ -491,7 +535,10 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
         match build_from_triangles::<I>(&clean_vertices, &clean_faces) {
             Ok(new_mesh) => {
                 #[cfg(debug_assertions)]
-                eprintln!("Collapse: mesh built successfully with {} halfedges", new_mesh.num_halfedges());
+                eprintln!(
+                    "Collapse: mesh built successfully with {} halfedges",
+                    new_mesh.num_halfedges()
+                );
                 *mesh = new_mesh;
             }
             Err(_e) => {
@@ -501,7 +548,6 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
         }
     }
 }
-
 
 /// Check if an edge can be safely collapsed (uses O(n) scans - for reference/testing).
 #[allow(dead_code)]
@@ -602,7 +648,10 @@ fn can_collapse_edge_fast(
 }
 
 /// Flip edges to improve vertex valence.
-fn flip_edges_to_improve_valence<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, preserve_boundary: bool) {
+fn flip_edges_to_improve_valence<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    preserve_boundary: bool,
+) {
     let (vertices, mut faces) = to_face_vertex(mesh);
 
     flip_edges_for_valence_faces(&vertices, &mut faces, preserve_boundary);
@@ -632,16 +681,16 @@ mod tests {
     #[test]
     fn test_isotropic_remesh_preserves_topology() {
         let mut mesh = create_tetrahedron();
-        let original_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let original_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
 
         let options = RemeshOptions::with_target_length(0.5).with_iterations(2);
         isotropic_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
 
-        let new_euler =
-            mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32 + mesh.num_faces() as i32;
+        let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
+            + mesh.num_faces() as i32;
         assert_eq!(original_euler, new_euler);
     }
 

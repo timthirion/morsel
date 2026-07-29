@@ -513,7 +513,9 @@ fn reduce_pinned_dofs(
 
     for &(row, col, value) in triplets {
         // A pinned row is not an equation we solve.
-        let Some(r) = reduced_index[row] else { continue };
+        let Some(r) = reduced_index[row] else {
+            continue;
+        };
 
         match pinned_value[col] {
             // Known column: fold its contribution into the right-hand side.

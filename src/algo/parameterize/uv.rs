@@ -171,8 +171,7 @@ impl<I: MeshIndex> UVMap<I> {
             let p2 = self.coords[face[2]];
 
             // 2D cross product for signed area
-            let area = 0.5
-                * ((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y)).abs();
+            let area = 0.5 * ((p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y)).abs();
             total += area;
         }
         total

@@ -117,12 +117,14 @@ impl GpuMesh {
 
             // Compute face normal, handling degenerate faces
             let raw_normal = mesh.face_normal(fid);
-            let normal = if raw_normal.x.is_finite() && raw_normal.y.is_finite() && raw_normal.z.is_finite() {
-                raw_normal
-            } else {
-                // Degenerate normal but non-degenerate area - use a default up vector
-                nalgebra::Vector3::new(0.0, 1.0, 0.0)
-            };
+            let normal =
+                if raw_normal.x.is_finite() && raw_normal.y.is_finite() && raw_normal.z.is_finite()
+                {
+                    raw_normal
+                } else {
+                    // Degenerate normal but non-degenerate area - use a default up vector
+                    nalgebra::Vector3::new(0.0, 1.0, 0.0)
+                };
 
             // Get UVs if available, otherwise default to (0, 0)
             let (uv0, uv1, uv2) = if let Some(uvs) = uv_map {
@@ -214,7 +216,10 @@ impl GpuMesh {
         });
 
         if skipped_face_count > 0 {
-            eprintln!("WARNING: Skipped {} degenerate faces (area < 1e-12)", skipped_face_count);
+            eprintln!(
+                "WARNING: Skipped {} degenerate faces (area < 1e-12)",
+                skipped_face_count
+            );
         }
 
         Self {
