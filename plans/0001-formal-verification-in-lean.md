@@ -202,10 +202,17 @@ sign of a determinant; `graham_scan` returns the convex hull; Delaunay satisfies
 the empty-circumcircle property. Those are end-to-end verifiable *algorithm*
 results, not just specification lemmas.
 
-It is also already a **local path dependency of morsel** (`../exactum`, per
-`AGENTS.md`) and is `#![forbid(unsafe_code)]` with zero dependencies — so it is
-both in scope for this repo's correctness and about the friendliest input a
-Rust-extraction toolchain could be handed.
+It is `#![forbid(unsafe_code)]` with zero dependencies — about the friendliest
+input a Rust-extraction toolchain could be handed.
+
+One clarification, since it affects how much this belongs in *morsel's* plans:
+`exactum` is declared as a path dependency in `Cargo.toml`, but no morsel source
+file calls it — the only mentions are aspirational lines in `lib.rs`'s module
+docs. So it is in the build graph, not on any code path, and verifying it would
+not currently discharge any risk in morsel. The argument for spiking there is
+purely that it is the easiest place to learn whether the toolchain works, not
+that morsel depends on its correctness. (The unused path dependencies to
+`exactum` and `approxum` are worth either using or dropping, separately.)
 
 Recommendation: run the Aeneas pipeline spike (Tier B item 1) against `exactum`
 rather than morsel. If the toolchain works there, port the technique here for the
