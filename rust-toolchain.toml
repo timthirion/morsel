@@ -1,0 +1,13 @@
+# Pinned so local checks and CI agree.
+#
+# Without this they drift: CI's floating `stable` was 1.97.0 while this machine
+# had 1.92.0, and the newer clippy rejected two `is_none()`/`unwrap()` pairs that
+# could not be reproduced locally. A red CI over a lint you cannot see is the
+# worst of both worlds for a solo maintainer.
+#
+# Bumping this is a deliberate commit: raise the version, run
+# `cargo clippy --all-targets -- -D warnings` for each feature set, fix what the
+# new lints find, and land it together.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]

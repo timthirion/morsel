@@ -164,17 +164,17 @@ fn compute_edge_vertices(
         let p0 = &vertices[v0];
         let p1 = &vertices[v1];
 
-        let new_pos = if info.opposite2.is_none() {
-            // Boundary edge: simple midpoint
-            Point3::from((p0.coords + p1.coords) * 0.5)
-        } else {
+        let new_pos = if let Some(opposite2) = info.opposite2 {
             // Interior edge: weighted average
             let p_opp1 = &vertices[info.opposite1];
-            let p_opp2 = &vertices[info.opposite2.unwrap()];
+            let p_opp2 = &vertices[opposite2];
             Point3::from(
                 (p0.coords + p1.coords) * (3.0 / 8.0)
                     + (p_opp1.coords + p_opp2.coords) * (1.0 / 8.0),
             )
+        } else {
+            // Boundary edge: simple midpoint
+            Point3::from((p0.coords + p1.coords) * 0.5)
         };
         (info.new_vertex_index, new_pos)
     };

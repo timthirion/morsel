@@ -198,14 +198,14 @@ fn compute_cc_edge_points(
         let p1 = &vertices[v1];
         let midpoint = (p0.coords + p1.coords) * 0.5;
 
-        let new_pos = if info.faces.1.is_none() {
-            // Boundary edge: just use midpoint
-            Point3::from(midpoint)
-        } else {
+        let new_pos = if let Some(second_face) = info.faces.1 {
             // Interior edge: average of midpoint and two face points
             let fp1 = &face_points[info.faces.0];
-            let fp2 = &face_points[info.faces.1.unwrap()];
+            let fp2 = &face_points[second_face];
             Point3::from((midpoint + fp1.coords + fp2.coords) / 3.0)
+        } else {
+            // Boundary edge: just use midpoint
+            Point3::from(midpoint)
         };
         (info.new_vertex_index, new_pos)
     };
