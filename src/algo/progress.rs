@@ -16,6 +16,9 @@
 //! let options = SmoothOptions::default().with_progress(progress);
 //! ```
 
+/// The boxed callback behind [`Progress`], taking `(current, total, message)`.
+type ProgressCallback = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// A progress callback that receives updates during long-running operations.
 ///
 /// The callback receives:
@@ -23,7 +26,7 @@
 /// - `total`: Total number of steps
 /// - `message`: Description of the current operation
 pub struct Progress {
-    callback: Box<dyn Fn(usize, usize, &str) + Send + Sync>,
+    callback: ProgressCallback,
 }
 
 impl Progress {

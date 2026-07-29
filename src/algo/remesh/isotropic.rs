@@ -292,8 +292,8 @@ fn split_long_edges_with_progress<I: MeshIndex>(
         long_edges.sort_by(|a, b| {
             let (v0a, v1a) = a.0;
             let (v0b, v1b) = b.0;
-            let len_a = (&vertices[v1a] - &vertices[v0a]).norm_squared();
-            let len_b = (&vertices[v1b] - &vertices[v0b]).norm_squared();
+            let len_a = (vertices[v1a] - vertices[v0a]).norm_squared();
+            let len_b = (vertices[v1b] - vertices[v0b]).norm_squared();
             len_b.partial_cmp(&len_a).unwrap()
         });
 
@@ -317,14 +317,13 @@ fn split_long_edges_with_progress<I: MeshIndex>(
             .flat_map(|(_, fis)| fis.iter().copied())
             .collect();
 
-        for fi in 0..faces.len() {
+        for (fi, &face) in faces.iter().enumerate() {
             if !faces_to_process.contains(&fi) {
-                new_faces.push(faces[fi]);
+                new_faces.push(face);
                 continue;
             }
 
             // This face has at least one long edge - need to subdivide
-            let face = faces[fi];
             let v0 = face[0];
             let v1 = face[1];
             let v2 = face[2];
@@ -443,19 +442,19 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
         let mut candidate_edges: Vec<(usize, usize, f64)> = Vec::new();
 
         for &(v0, v1) in topology.edge_faces.keys() {
-            let length = (&vertices[v1] - &vertices[v0]).norm();
+            let length = (vertices[v1] - vertices[v0]).norm();
 
-            if length < low_threshold {
-                if can_collapse_edge_fast(
+            if length < low_threshold
+                && can_collapse_edge_fast(
                     &vertices,
                     &topology,
                     v0,
                     v1,
                     high_threshold,
                     preserve_boundary,
-                ) {
-                    candidate_edges.push((v0, v1, length));
-                }
+                )
+            {
+                candidate_edges.push((v0, v1, length));
             }
         }
 

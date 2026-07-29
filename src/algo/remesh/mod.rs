@@ -289,7 +289,7 @@ pub(crate) fn split_edge(
 
 /// Collapse an edge by merging v1 into v0.
 pub(crate) fn collapse_edge(
-    vertices: &mut Vec<Point3<f64>>,
+    vertices: &mut [Point3<f64>],
     faces: &mut Vec<[usize; 3]>,
     v0: usize,
     v1: usize,
@@ -788,7 +788,7 @@ fn is_convex_quad(p0: &Point3<f64>, p1: &Point3<f64>, p2: &Point3<f64>, p3: &Poi
 }
 
 /// Flip an edge in the face list.
-pub(crate) fn flip_edge(faces: &mut Vec<[usize; 3]>, v0: usize, v1: usize) -> bool {
+pub(crate) fn flip_edge(faces: &mut [[usize; 3]], v0: usize, v1: usize) -> bool {
     // Find the two faces sharing this edge
     let mut face_info: Vec<(usize, usize)> = Vec::new();
 

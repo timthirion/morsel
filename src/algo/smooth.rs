@@ -179,9 +179,8 @@ pub fn laplacian_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options
         };
 
         // Apply new positions
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
 }
@@ -319,9 +318,8 @@ pub fn cotangent_smooth<I: MeshIndex + Sync>(mesh: &mut HalfEdgeMesh<I>, options
         };
 
         // Apply new positions
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
 }
@@ -520,9 +518,8 @@ pub fn bilateral_smooth<I: MeshIndex + Sync>(
         };
 
         // Apply new positions
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
 }
@@ -680,9 +677,8 @@ pub fn mean_curvature_flow<I: MeshIndex + Sync>(
         };
 
         // Apply new positions
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
 }
@@ -913,9 +909,8 @@ fn apply_laplacian_step_impl<I: MeshIndex + Sync>(
     };
 
     // Apply new positions
-    for i in 0..num_vertices {
-        let vid = VertexId::new(i);
-        mesh.set_position(vid, new_positions[i]);
+    for (i, &position) in new_positions.iter().enumerate() {
+        mesh.set_position(VertexId::new(i), position);
     }
 }
 
@@ -972,9 +967,8 @@ pub fn laplacian_smooth_with_progress<I: MeshIndex + Sync>(
                 .collect()
         };
 
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
     progress.report(
@@ -1065,9 +1059,8 @@ pub fn cotangent_smooth_with_progress<I: MeshIndex + Sync>(
                 .collect()
         };
 
-        for i in 0..num_vertices {
-            let vid = VertexId::new(i);
-            mesh.set_position(vid, new_positions[i]);
+        for (i, &position) in new_positions.iter().enumerate() {
+            mesh.set_position(VertexId::new(i), position);
         }
     }
     progress.report(

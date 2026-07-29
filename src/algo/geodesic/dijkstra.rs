@@ -12,7 +12,7 @@ use crate::mesh::{HalfEdgeMesh, MeshIndex, VertexId};
 use super::GeodesicResult;
 
 /// Options for Dijkstra's algorithm.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DijkstraOptions {
     /// Whether to store predecessor information for path reconstruction.
     pub store_predecessors: bool,
@@ -24,16 +24,6 @@ pub struct DijkstraOptions {
     /// Target vertex for early termination.
     /// If set, the algorithm stops once this vertex is reached.
     pub target: Option<usize>,
-}
-
-impl Default for DijkstraOptions {
-    fn default() -> Self {
-        Self {
-            store_predecessors: false,
-            max_distance: None,
-            target: None,
-        }
-    }
 }
 
 impl DijkstraOptions {

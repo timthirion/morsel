@@ -59,9 +59,13 @@ impl CsrMatrix {
                 // New entry
                 col_idx.push(col);
                 values.push(val);
-                // Update row pointers for any skipped rows
-                for r in (prev_row.wrapping_add(1))..=row {
-                    row_ptr[r] = col_idx.len() - 1;
+                // Update row pointers for any skipped rows. The range inverts
+                // when this entry shares `row` with the previous one, so guard
+                // rather than slicing straight away.
+                let entry = col_idx.len() - 1;
+                let first_skipped = prev_row.wrapping_add(1);
+                if first_skipped <= row {
+                    row_ptr[first_skipped..=row].fill(entry);
                 }
                 prev_row = row;
                 prev_col = col;
@@ -70,8 +74,9 @@ impl CsrMatrix {
 
         // Fill remaining row pointers
         let nnz = col_idx.len();
-        for r in (prev_row + 1)..=rows {
-            row_ptr[r] = nnz;
+        let first_unset = prev_row.wrapping_add(1);
+        if first_unset <= rows {
+            row_ptr[first_unset..=rows].fill(nnz);
         }
 
         Self {

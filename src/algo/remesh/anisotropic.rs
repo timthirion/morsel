@@ -378,18 +378,18 @@ fn collapse_short_edges_anisotropic<I: MeshIndex>(
                     * 0.5;
                 let low_threshold = target * 4.0 / 5.0;
 
-                if length < low_threshold {
-                    if can_collapse_edge_anisotropic(
+                if length < low_threshold
+                    && can_collapse_edge_anisotropic(
                         &vertices,
                         &faces,
                         &vertex_sizes,
                         v0,
                         v1,
                         preserve_boundary,
-                    ) {
-                        edge_to_collapse = Some((v0, v1));
-                        break;
-                    }
+                    )
+                {
+                    edge_to_collapse = Some((v0, v1));
+                    break;
                 }
             }
             if edge_to_collapse.is_some() {

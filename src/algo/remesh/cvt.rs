@@ -487,12 +487,15 @@ pub(crate) fn closest_point_on_segment(
 }
 
 /// Triangulate seed points on the mesh surface.
+/// A vertex list paired with the faces indexing into it.
+type MeshArrays = (Vec<Point3<f64>>, Vec<[usize; 3]>);
+
 fn triangulate_seeds_on_surface(
     original_vertices: &[Point3<f64>],
     original_faces: &[[usize; 3]],
     seeds: &[Point3<f64>],
     _preserve_boundary: bool,
-) -> Option<(Vec<Point3<f64>>, Vec<[usize; 3]>)> {
+) -> Option<MeshArrays> {
     if seeds.len() < 3 {
         return None;
     }

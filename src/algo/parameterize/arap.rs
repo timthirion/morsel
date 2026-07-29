@@ -823,8 +823,8 @@ mod tests {
         let uv = compute_tutte_embedding(&vertices, &faces, 3, &boundary).unwrap();
 
         // All vertices are boundary, should be on unit circle
-        for i in 0..3 {
-            let r = (uv[i].x.powi(2) + uv[i].y.powi(2)).sqrt();
+        for p in &uv {
+            let r = (p.x.powi(2) + p.y.powi(2)).sqrt();
             assert!((r - 1.0).abs() < 1e-10);
         }
     }

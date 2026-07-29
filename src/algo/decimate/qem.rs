@@ -79,7 +79,7 @@ impl Quadric {
     }
 
     /// Convert to a 4x4 matrix for solving the optimal point.
-    fn to_matrix(&self) -> Matrix4<f64> {
+    fn to_matrix(self) -> Matrix4<f64> {
         Matrix4::new(
             self.data[0],
             self.data[1],
@@ -423,11 +423,9 @@ fn decimate_mesh(
             }
 
             // Check for degenerate face (two or more same vertices)
-            if changed {
-                if face[0] == face[1] || face[1] == face[2] || face[0] == face[2] {
-                    valid_faces[fi] = false;
-                    current_face_count -= 1;
-                }
+            if changed && (face[0] == face[1] || face[1] == face[2] || face[0] == face[2]) {
+                valid_faces[fi] = false;
+                current_face_count -= 1;
             }
         }
 

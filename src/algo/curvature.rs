@@ -845,7 +845,7 @@ mod tests {
 
             // Shape index should be in [-1, 1]
             assert!(
-                si >= -1.0 - 1e-10 && si <= 1.0 + 1e-10,
+                (-1.0 - 1e-10..=1.0 + 1e-10).contains(&si),
                 "Shape index out of range: {}",
                 si
             );

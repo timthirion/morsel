@@ -580,16 +580,12 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
             }
 
             // Next/prev consistency
-            if he.next.is_valid() {
-                if self.halfedge(he.next).prev != heid {
-                    return false;
-                }
+            if he.next.is_valid() && self.halfedge(he.next).prev != heid {
+                return false;
             }
 
-            if he.prev.is_valid() {
-                if self.halfedge(he.prev).next != heid {
-                    return false;
-                }
+            if he.prev.is_valid() && self.halfedge(he.prev).next != heid {
+                return false;
             }
         }
 

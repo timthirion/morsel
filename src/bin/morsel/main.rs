@@ -340,8 +340,8 @@ fn create_progress() -> Progress {
         let filled = (percent * bar_width) / 100;
         let empty = bar_width - filled;
 
-        let bar: String = std::iter::repeat('=').take(filled).collect();
-        let space: String = std::iter::repeat(' ').take(empty).collect();
+        let bar: String = "=".repeat(filled);
+        let space: String = " ".repeat(empty);
 
         // Use carriage return to overwrite the line
         eprint!("\r[{}{}] {:3}% {}", bar, space, percent, message);

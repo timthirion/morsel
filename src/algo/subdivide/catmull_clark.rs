@@ -544,13 +544,13 @@ mod tests {
 
     #[test]
     fn test_catmull_clark_face_point_is_centroid() {
-        let vertices = vec![
+        let vertices = [
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(2.0, 0.0, 0.0),
             Point3::new(2.0, 2.0, 0.0),
             Point3::new(0.0, 2.0, 0.0),
         ];
-        let faces = vec![[0, 1, 2, 3]];
+        let faces = [[0, 1, 2, 3]];
 
         // Face point should be at centroid: (1, 1, 0)
         let face_points: Vec<Point3<f64>> = faces
