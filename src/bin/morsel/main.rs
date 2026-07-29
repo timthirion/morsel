@@ -592,6 +592,9 @@ fn cmd_decimate(
 
     let progress = create_progress();
 
+    let faces_before = mesh.num_faces();
+    let requested = faces.unwrap_or_else(|| ((faces_before as f64) * ratio).round() as usize);
+
     let start = Instant::now();
     decimate::qem_decimate_with_progress(&mut mesh, &options, &progress);
     let elapsed = start.elapsed();
@@ -601,6 +604,21 @@ fn cmd_decimate(
         mesh.num_vertices(),
         mesh.num_faces()
     );
+
+    // Decimation has no error channel and stops short when no remaining collapse
+    // is topologically safe, or when the collapsed result would not rebuild into a
+    // valid mesh. Say so rather than letting the shortfall pass unmentioned.
+    if mesh.num_faces() > requested {
+        eprintln!(
+            "warning: reached {} faces, not the requested {} ({} of {} collapsed). \
+             Remaining edges either fail the link condition or would produce a \
+             non-manifold mesh; the un-decimated mesh is kept in that case.",
+            mesh.num_faces(),
+            requested,
+            faces_before - mesh.num_faces(),
+            faces_before - requested
+        );
+    }
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 

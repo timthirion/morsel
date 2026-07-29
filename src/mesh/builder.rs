@@ -19,7 +19,35 @@ use crate::error::{MeshError, Result};
 /// * `faces` - List of triangle faces, each as [v0, v1, v2] indices
 ///
 /// # Returns
+///
 /// A half-edge mesh, or an error if the input is invalid.
+///
+/// # Validation
+///
+/// A half-edge mesh can only represent an *orientable manifold* surface, so input
+/// that isn't one is rejected rather than built. Without these checks the builder
+/// returned `Ok` with a structurally broken mesh — a half-edge whose `twin` was
+/// never assigned, because `edge_map.insert` silently overwrote the earlier face's
+/// entry — and every algorithm downstream inherited the corruption. Rejected:
+///
+/// - a vertex index out of range, or a face repeating a vertex;
+/// - two faces traversing the same edge in the *same* direction, which means they
+///   are duplicates or inconsistently oriented (in a consistently oriented mesh
+///   the two faces on an interior edge traverse it in opposite directions);
+/// - an edge with more than two incident faces;
+/// - a vertex whose incident faces do not form a single fan or cycle — a
+///   "bowtie". Circulating such a vertex cannot reach all of its faces, so the
+///   structure has no valid representation for it.
+///
+/// Note what is *not* rejected: a mesh may be disconnected, may have several
+/// boundary loops, may contain zero-area or sliver faces, and may have vertices
+/// no face references. Those are all representable.
+///
+/// # Errors
+///
+/// [`MeshError::EmptyMesh`], [`MeshError::InvalidVertexIndex`],
+/// [`MeshError::DegenerateFace`], [`MeshError::NonManifoldEdge`], or
+/// [`MeshError::NonManifold`].
 ///
 /// # Example
 /// ```
@@ -45,21 +73,7 @@ pub fn build_from_triangles<I: MeshIndex>(
         return Err(MeshError::EmptyMesh);
     }
 
-    // Validate vertex indices
-    for (fi, face) in faces.iter().enumerate() {
-        for &vi in face {
-            if vi >= vertices.len() {
-                return Err(MeshError::InvalidVertexIndex {
-                    face: fi,
-                    vertex: vi,
-                });
-            }
-        }
-        // Check for degenerate faces
-        if face[0] == face[1] || face[1] == face[2] || face[0] == face[2] {
-            return Err(MeshError::DegenerateFace { face: fi });
-        }
-    }
+    validate_manifold_soup(vertices.len(), faces)?;
 
     let mut mesh = HalfEdgeMesh::with_capacity(vertices.len(), faces.len());
 
@@ -149,6 +163,135 @@ pub fn build_from_triangles<I: MeshIndex>(
     fix_boundary_vertex_halfedges(&mut mesh);
 
     Ok(mesh)
+}
+
+/// Reject face-vertex input that a half-edge mesh cannot represent.
+///
+/// See [`build_from_triangles`] for what is and isn't rejected, and why.
+fn validate_manifold_soup(num_vertices: usize, faces: &[[usize; 3]]) -> Result<()> {
+    // ---- per-face sanity ------------------------------------------------
+    for (fi, face) in faces.iter().enumerate() {
+        for &vi in face {
+            if vi >= num_vertices {
+                return Err(MeshError::InvalidVertexIndex {
+                    face: fi,
+                    vertex: vi,
+                });
+            }
+        }
+        if face[0] == face[1] || face[1] == face[2] || face[0] == face[2] {
+            return Err(MeshError::DegenerateFace { face: fi });
+        }
+    }
+
+    // ---- edges ----------------------------------------------------------
+    // A directed edge may be used once. Two faces traversing `a -> b` the same
+    // way are duplicates or disagree about orientation; either way the twin
+    // linking below has nowhere to put the second one.
+    let mut directed: HashMap<(usize, usize), usize> = HashMap::with_capacity(faces.len() * 3);
+    // Undirected edge -> the (at most two) faces on it.
+    let mut undirected: HashMap<(usize, usize), [Option<usize>; 2]> =
+        HashMap::with_capacity(faces.len() * 3);
+
+    for (fi, face) in faces.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (face[k], face[(k + 1) % 3]);
+
+            if let Some(&other) = directed.get(&(a, b)) {
+                return Err(MeshError::NonManifold {
+                    details: format!(
+                        "faces {other} and {fi} both traverse edge ({a} -> {b}) in the same \
+                         direction, so they are duplicates or inconsistently oriented"
+                    ),
+                });
+            }
+            directed.insert((a, b), fi);
+
+            let key = if a < b { (a, b) } else { (b, a) };
+            let slot = undirected.entry(key).or_insert([None, None]);
+            match slot {
+                [None, _] => slot[0] = Some(fi),
+                [Some(_), None] => slot[1] = Some(fi),
+                _ => {
+                    return Err(MeshError::NonManifoldEdge {
+                        v0: key.0,
+                        v1: key.1,
+                    })
+                }
+            }
+        }
+    }
+
+    // ---- vertices -------------------------------------------------------
+    // Each vertex's incident faces must form a single fan or cycle. Work with
+    // *corners* — one per (face, slot) — and union the two corners at a vertex
+    // whenever a pair of faces shares an edge through it. A vertex whose corners
+    // end up in more than one component is a bowtie.
+    let mut uf = UnionFind::new(faces.len() * 3);
+    let corner_of = |fi: usize, v: usize| -> Option<usize> {
+        faces[fi].iter().position(|&x| x == v).map(|k| fi * 3 + k)
+    };
+
+    for (&(a, b), slot) in &undirected {
+        if let [Some(f0), Some(f1)] = slot {
+            for v in [a, b] {
+                if let (Some(c0), Some(c1)) = (corner_of(*f0, v), corner_of(*f1, v)) {
+                    uf.union(c0, c1);
+                }
+            }
+        }
+    }
+
+    // Group corners by vertex and check each group is one component.
+    let mut representative: Vec<Option<usize>> = vec![None; num_vertices];
+    for (fi, face) in faces.iter().enumerate() {
+        for (k, &v) in face.iter().enumerate() {
+            let root = uf.find(fi * 3 + k);
+            match representative[v] {
+                None => representative[v] = Some(root),
+                Some(r) if r == root => {}
+                Some(_) => {
+                    return Err(MeshError::NonManifold {
+                        details: format!(
+                            "vertex {v} is non-manifold: its incident faces form more than one \
+                             fan (a bowtie), so circulating the vertex cannot reach all of them"
+                        ),
+                    })
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Minimal union-find, used only by [`validate_manifold_soup`].
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+        }
+    }
+
+    fn find(&mut self, mut x: usize) -> usize {
+        while self.parent[x] != x {
+            // Path halving keeps this near-constant without recursion.
+            self.parent[x] = self.parent[self.parent[x]];
+            x = self.parent[x];
+        }
+        x
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra != rb {
+            self.parent[ra] = rb;
+        }
+    }
 }
 
 /// Link boundary half-edges into proper loops.
@@ -380,6 +523,159 @@ pub fn to_face_vertex_quads<I: MeshIndex>(
 
 #[cfg(test)]
 mod tests {
+    // ---- manifold validation ------------------------------------------
+
+    /// Three faces on one edge cannot be represented, so it must be rejected
+    /// rather than built into a half-edge with no twin.
+    #[test]
+    fn rejects_nonmanifold_edge() {
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(0.5, -1.0, 0.0),
+            Point3::new(0.5, 0.0, 1.0),
+        ];
+        // All three faces traverse 0 -> 1, so this trips the directed-edge check
+        // first; either rejection is correct.
+        let faces = vec![[0, 1, 2], [0, 1, 3], [0, 1, 4]];
+        let err = build_from_triangles::<u32>(&vertices, &faces).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-manifold"),
+            "expected a non-manifold rejection, got: {msg}"
+        );
+    }
+
+    /// Two fans meeting at a single vertex: circulating it cannot reach both.
+    #[test]
+    fn rejects_bowtie_vertex() {
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(-0.5, -1.0, 0.0),
+        ];
+        let faces = vec![[0, 1, 2], [0, 3, 4]];
+        let err = build_from_triangles::<u32>(&vertices, &faces).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("vertex 0") && msg.contains("non-manifold"),
+            "expected vertex 0 named as non-manifold, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_face() {
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 1.0, 0.0),
+        ];
+        let faces = vec![[0, 1, 2], [0, 1, 2]];
+        assert!(build_from_triangles::<u32>(&vertices, &faces).is_err());
+    }
+
+    /// Two faces wound the same way across a shared edge disagree about which
+    /// side is out, so the surface has no consistent orientation.
+    #[test]
+    fn rejects_inconsistent_winding() {
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        // [0,2,3] and [0,3,2] both use the edge between 2 and 3, wound oppositely
+        // relative to each other.
+        let faces = vec![[0, 1, 2], [0, 2, 3], [0, 3, 2]];
+        let err = build_from_triangles::<u32>(&vertices, &faces).unwrap_err();
+        assert!(err.to_string().contains("non-manifold"));
+    }
+
+    /// The validator must not over-reach. All of these are representable and must
+    /// still build.
+    #[test]
+    fn accepts_awkward_but_representable_input() {
+        // Disconnected components.
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(6.0, 0.0, 0.0),
+            Point3::new(5.5, 1.0, 0.0),
+        ];
+        assert!(
+            build_from_triangles::<u32>(&vertices, &[[0, 1, 2], [3, 4, 5]]).is_ok(),
+            "a disconnected mesh is still a manifold"
+        );
+
+        // A vertex no face references.
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(9.0, 9.0, 9.0),
+        ];
+        assert!(
+            build_from_triangles::<u32>(&vertices, &[[0, 1, 2]]).is_ok(),
+            "an isolated vertex is representable"
+        );
+
+        // A zero-area face: geometrically degenerate, topologically fine.
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        assert!(
+            build_from_triangles::<u32>(&vertices, &[[0, 1, 2], [0, 3, 1]]).is_ok(),
+            "a collinear face is degenerate geometry, not invalid topology"
+        );
+
+        // Two vertices sharing a position but forming a single fan.
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0), // coincident with index 1
+            Point3::new(0.5, 1.0, 0.0),
+        ];
+        assert!(
+            build_from_triangles::<u32>(&vertices, &[[0, 1, 3], [1, 2, 3]]).is_ok(),
+            "coincident positions are a geometric matter, not a topological one"
+        );
+    }
+
+    /// A hole punched in a grid gives two boundary loops. Still a manifold.
+    #[test]
+    fn accepts_two_boundary_loops() {
+        let n = 4usize;
+        let mut vertices = Vec::new();
+        let mut faces = Vec::new();
+        for j in 0..=n {
+            for i in 0..=n {
+                vertices.push(Point3::new(i as f64, j as f64, 0.0));
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                if i == 1 && j == 1 {
+                    continue; // the hole
+                }
+                let v00 = j * (n + 1) + i;
+                let v10 = j * (n + 1) + i + 1;
+                let v01 = (j + 1) * (n + 1) + i;
+                let v11 = (j + 1) * (n + 1) + i + 1;
+                faces.push([v00, v10, v11]);
+                faces.push([v00, v11, v01]);
+            }
+        }
+        assert!(build_from_triangles::<u32>(&vertices, &faces).is_ok());
+    }
+
     use super::*;
 
     fn single_triangle() -> (Vec<Point3<f64>>, Vec<[usize; 3]>) {

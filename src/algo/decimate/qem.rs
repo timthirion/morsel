@@ -192,6 +192,35 @@ impl Ord for EdgeCandidate {
 ///
 /// * `mesh` - The mesh to decimate (modified in place)
 /// * `options` - Decimation parameters
+///
+/// # May decimate less than requested
+///
+/// The target is a request, not a guarantee, and this function has no error channel
+/// with which to say so. It stops short when no remaining collapse is
+/// topologically safe. Compare `num_faces()` before and after if the achieved
+/// reduction matters; the CLI reports both and warns on a shortfall.
+///
+/// Two rules do the rejecting, and both matter:
+///
+/// - **The link condition** — the two endpoints' neighbourhoods must meet in
+///   exactly the vertices opposite the edge.
+/// - **No interior edge with both endpoints on the boundary.** Such an edge joins
+///   two separate stretches of boundary, and collapsing it pinches them together
+///   into a bowtie. The link condition does not catch this, which is why
+///   decimation used to work on a closed sphere but produce a non-manifold vertex
+///   on the Stanford bunny.
+///
+/// If a full run still fails to rebuild into a valid manifold, the requested
+/// reduction is halved and retried a few times, and failing that the caller's mesh
+/// is left untouched. That is belt-and-braces: before `build_from_triangles`
+/// validated its input, an invalid rebuild was simply accepted and decimation
+/// returned a structurally corrupt mesh while reporting success.
+///
+/// Note that refusing can be the *right* answer even on innocuous-looking input.
+/// `examples/cube.obj` is six disconnected quads with split vertices, every one of
+/// its 24 vertices on a boundary; the only interior edges are the quad diagonals,
+/// and collapsing those deletes whole patches. It previously "decimated" 12 faces
+/// to 6 by destroying three of the six.
 pub fn qem_decimate<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &DecimateOptions) {
     qem_decimate_internal(mesh, options, None);
 }
@@ -216,28 +245,59 @@ fn qem_decimate_internal<I: MeshIndex>(
         return;
     }
 
-    let target_faces = options.compute_target(faces.len());
-    if target_faces >= faces.len() {
+    let original_faces = faces.len();
+    let requested = options.compute_target(original_faces);
+    if requested >= original_faces {
         return;
     }
 
-    // Run the decimation algorithm
-    let (new_vertices, new_faces) = decimate_mesh(
-        vertices,
-        faces,
-        target_faces,
-        options.preserve_boundary,
-        options.max_error,
-        options.parallel,
-        progress,
-    );
+    // Attempt one reduction, returning the rebuilt mesh only if the collapsed
+    // face list is a valid manifold.
+    //
+    // `is_collapse_valid` checks the link condition per collapse, but it is not
+    // airtight — on the Stanford bunny a sequence of individually-legal collapses
+    // still produces a bowtie vertex. Rather than emit that (which is what
+    // happened before `build_from_triangles` validated its input), back off.
+    let attempt = |target: usize| -> Option<HalfEdgeMesh<I>> {
+        let (new_vertices, new_faces) = decimate_mesh(
+            vertices.clone(),
+            faces.clone(),
+            target,
+            options.preserve_boundary,
+            options.max_error,
+            options.parallel,
+            progress,
+        );
+        if new_faces.is_empty() {
+            return None;
+        }
+        build_from_triangles::<I>(&new_vertices, &new_faces).ok()
+    };
 
-    // Rebuild the half-edge mesh
-    if !new_faces.is_empty() {
-        if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &new_faces) {
+    if let Some(new_mesh) = attempt(requested) {
+        *mesh = new_mesh;
+        return;
+    }
+
+    // Halve the requested reduction until something rebuilds. Geometric back-off
+    // rather than a binary search, because success is not monotone in the target:
+    // a more aggressive reduction can happen to avoid the configuration a milder
+    // one runs into. Bounded at six extra attempts, and only reached on meshes
+    // where the first try already failed.
+    let mut reduction = original_faces - requested;
+    for _ in 0..8 {
+        reduction /= 2;
+        if reduction == 0 {
+            break;
+        }
+        if let Some(new_mesh) = attempt(original_faces - reduction) {
             *mesh = new_mesh;
+            return;
         }
     }
+
+    // Nothing reduced safely; leave the caller's mesh untouched rather than
+    // replacing it with a broken one.
 }
 
 /// Main decimation algorithm on face-vertex representation.
@@ -269,6 +329,23 @@ fn decimate_mesh(
 
     // Build edge-to-faces mapping
     let mut edge_faces = build_edge_faces(&faces);
+
+    // Boundary vertices, needed by the bowtie rule in `is_collapse_valid`
+    // regardless of `preserve_boundary`. An undirected edge with a single incident
+    // face is a boundary edge, and its endpoints are boundary vertices. Computed
+    // once: a legal collapse never moves a vertex onto or off the boundary, and
+    // treating a stale entry as still-boundary only over-rejects, which is the
+    // safe direction.
+    let on_boundary = {
+        let mut flags = vec![false; n_vertices];
+        for (&(a, b), fs) in &edge_faces {
+            if fs.len() == 1 {
+                flags[a] = true;
+                flags[b] = true;
+            }
+        }
+        flags
+    };
 
     // Version counter for each vertex (to detect stale heap entries)
     let mut vertex_versions: Vec<usize> = vec![0; n_vertices];
@@ -364,6 +441,7 @@ fn decimate_mesh(
             &faces,
             &valid_faces,
             &edge_faces,
+            &on_boundary,
         ) {
             continue;
         }
@@ -760,6 +838,7 @@ fn is_collapse_valid(
     faces: &[[usize; 3]],
     valid_faces: &[bool],
     edge_faces: &HashMap<(usize, usize), Vec<usize>>,
+    on_boundary: &[bool],
 ) -> bool {
     // Get the faces adjacent to the edge
     let edge = canonical_edge(v0, v1);
@@ -770,6 +849,19 @@ fn is_collapse_valid(
 
     // Edge should have 1 or 2 adjacent faces
     if edge_face_count == 0 || edge_face_count > 2 {
+        return false;
+    }
+
+    // An *interior* edge whose both endpoints sit on the boundary joins two
+    // separate stretches of boundary. Collapsing it pinches them together at the
+    // surviving vertex, producing a bowtie — two fans meeting at a point — which a
+    // half-edge mesh cannot represent.
+    //
+    // The vertex link condition below does not catch this: the two endpoints have
+    // exactly the expected common neighbours, so the collapse looks legal. It is
+    // why decimation worked on a closed sphere but produced a non-manifold vertex
+    // on the Stanford bunny, which has boundary loops around its base.
+    if edge_face_count == 2 && on_boundary[v0] && on_boundary[v1] {
         return false;
     }
 

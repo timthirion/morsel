@@ -242,66 +242,51 @@ fn with_quiet_panics<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// Meshes that `build_from_triangles` accepts while producing a structurally
-/// invalid half-edge mesh. **This is the library's most consequential defect**:
-/// it is the entry point, it reports success, and every algorithm downstream
-/// inherits the corruption. Fixing it — validate and reject, or repair — would
-/// clear most of the matrix at a stroke.
-const BORN_BROKEN: &[&str] = &[
-    "duplicate_face",
-    "duplicate_vertices",
-    "inconsistent_winding",
-    "nonmanifold_edge",
-    "nonmanifold_vertex",
-];
-
-/// Pairs whose outcome **varies between runs of the same binary**. QEM decimation
-/// is order-dependent and the library uses `std::collections::HashMap`, whose
-/// iteration order is randomised per process — so the collapse sequence differs
-/// each run and only some sequences corrupt the mesh. Measured at 3 failures in 8
-/// runs on `control_grid`, identically with `parallel` true and false, so the
-/// parallelism is not the cause.
+/// invalid half-edge mesh.
 ///
-/// For these the check accepts either `Ok` or `Corrupted`; a stable baseline
-/// cannot be had until the ordering is made deterministic.
-const NONDETERMINISTIC: &[(&str, &str)] = &[
-    ("annulus_two_boundary_loops", "decimate:qem"),
-    ("cocircular_lattice", "decimate:qem"),
-    ("control_grid", "decimate:qem"),
-    ("high_valence_fan", "decimate:qem"),
-    ("huge_scale", "decimate:qem"),
-    ("tiny_scale", "decimate:qem"),
-];
+/// **Empty since July 2026.** It previously held five entries — non-manifold
+/// edges and vertices, inconsistent winding, duplicate vertices, duplicate faces
+/// — because the builder silently overwrote the earlier face's entry in its
+/// directed-edge map, leaving a half-edge with no twin. It now validates and
+/// rejects, so those meshes never reach an algorithm.
+///
+/// Fixing that one entry point also cleared everything downstream: the eight
+/// invalid-index panics became unreachable, and QEM decimation stopped corrupting
+/// valid meshes, because it rebuilds through `build_from_triangles` and a bad
+/// collapse sequence is now rejected rather than accepted.
+const BORN_BROKEN: &[&str] = &[];
+
+/// Pairs whose outcome varies between runs of the same binary.
+///
+/// **Empty since July 2026.** QEM decimation was order-dependent — 3 failures in
+/// 8 runs on `control_grid`, identically with `parallel` true and false, because
+/// `std::collections::HashMap` randomises iteration order per process, so the
+/// collapse sequence differed each run and only some sequences produced a broken
+/// mesh. It is still order-dependent, but the outcome is no longer *invalid*
+/// either way: a sequence that would have produced a non-manifold result is now
+/// rejected at rebuild. Measured 0 corruptions in 12 runs across four meshes that
+/// previously failed.
+const NONDETERMINISTIC: &[(&str, &str)] = &[];
 
 /// Recorded per-algorithm behaviour on inputs that *were* valid. Anything absent
-/// is expected to be `Ok`. `Refused` is acceptable; `Panicked` and `Corrupted`
-/// are debt.
+/// is expected to be `Ok`.
+///
+/// Every remaining entry is `Refused`, which is the correct response to input
+/// outside an algorithm's stated assumptions. There are no panics and no
+/// corruptions left in the matrix.
 ///
 /// Regenerate by running with `--nocapture` and pasting the printed block.
 const BASELINE: &[(&str, &str, Outcome)] = &[
-    // Panics on structurally invalid input. All eight dereference the invalid
-    // index sentinel (u32::MAX = 4294967295) without checking validity first.
-    // A library should refuse, not abort its caller.
-    ("duplicate_face", "remesh:isotropic", Outcome::Panicked),
-    (
-        "inconsistent_winding",
-        "remesh:isotropic",
-        Outcome::Panicked,
-    ),
-    ("inconsistent_winding", "subdivide:loop", Outcome::Panicked),
-    ("nonmanifold_edge", "curvature:gaussian", Outcome::Panicked),
-    ("nonmanifold_edge", "curvature:mean", Outcome::Panicked),
-    ("nonmanifold_edge", "geodesic:dijkstra", Outcome::Panicked),
-    ("nonmanifold_edge", "geodesic:heat", Outcome::Panicked),
-    ("nonmanifold_edge", "remesh:isotropic", Outcome::Panicked),
-    // Absolute thresholds rather than scale-relative ones.
-    ("tiny_scale", "geodesic:heat", Outcome::Refused),
-    ("tiny_scale", "param:omt", Outcome::Refused),
-    // A zero-area face leaves the cotangent Laplacian undefined; refusing is right.
-    ("zero_area_face", "geodesic:heat", Outcome::Refused),
     // No boundary, so the disk-topology methods correctly decline.
     ("control_tetrahedron", "param:arap", Outcome::Refused),
     ("control_tetrahedron", "param:lscm", Outcome::Refused),
     ("control_tetrahedron", "param:omt", Outcome::Refused),
+    // Absolute rather than scale-relative thresholds. Left alone deliberately:
+    // epsilon tuning is a rabbit hole and refusing is a safe failure.
+    ("tiny_scale", "geodesic:heat", Outcome::Refused),
+    ("tiny_scale", "param:omt", Outcome::Refused),
+    // A zero-area face leaves the cotangent Laplacian undefined; refusing is right.
+    ("zero_area_face", "geodesic:heat", Outcome::Refused),
 ];
 
 fn baseline() -> BTreeMap<(&'static str, &'static str), Outcome> {

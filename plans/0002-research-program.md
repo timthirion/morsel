@@ -298,6 +298,13 @@ compare numerically. Cheap to design in now, painful to retrofit.
       The sweep separates *inherited* from *caused* corruption, which mattered —
       before that distinction the table blamed vertex smoothing for breaking
       half-edge twins, which it cannot do, since it never touches connectivity.
+- [x] Fix the entry point and the decimation defects the sweep found. The matrix is
+      now entirely `ok` or `refused`: no panics, no corruption.
+      `build_from_triangles` validates and rejects non-manifold input, and QEM
+      gained the missing "no interior edge with both endpoints on the boundary"
+      rule. Numerical threshold work (scale-relative epsilons in the heat method
+      and OMT) deliberately left alone — refusing is a safe failure and epsilon
+      tuning is a rabbit hole.
 - [ ] Mesh `repair` and a seam/cut generator — without them
       `morsel parameterize examples/stanford-bunny.obj -m omt` fails, because
       every bundled example is closed and LSCM/ARAP/OMT all need boundary.
