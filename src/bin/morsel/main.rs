@@ -637,13 +637,8 @@ fn cmd_parameterize(
                 min_lscm, max_lscm, rms_lscm
             );
 
-            // Scale the sampling grid to the mesh; at a fixed resolution the
-            // area estimates degrade as vertex count grows.
-            let opts = parameterize::OMTOptions::for_vertex_count(mesh.num_vertices());
-            println!(
-                "Applying OMT area-preserving correction (grid {}²)...",
-                opts.grid_resolution
-            );
+            println!("Applying OMT area-preserving correction...");
+            let opts = parameterize::OMTOptions::default();
             let (omt_uvs, report) = parameterize::omt_with_report(&mesh, &lscm_uvs, &opts)
                 .map_err(|e| format!("OMT failed: {e}"))?;
 
@@ -653,18 +648,17 @@ fn cmd_parameterize(
                 "OMT area distortion:  min={:.3}, max={:.3}, rms={:.4}",
                 min_omt, max_omt, rms_omt
             );
+            println!(
+                "OMT transport: {} iterations, worst cell area error {:.2e}{}",
+                report.iterations,
+                report.max_relative_error,
+                if report.converged {
+                    " (converged)"
+                } else {
+                    " (hit iteration limit)"
+                }
+            );
 
-            if !report.is_well_sampled() {
-                eprintln!(
-                    "warning: only {:.1} grid samples per power cell ({} samples, {} vertices). \
-                     Below ~25 the area estimates are unreliable and OMT can make distortion \
-                     worse rather than better; treat this result with suspicion. This mesh is \
-                     too dense for the sampling-based power diagram.",
-                    report.samples_per_cell(),
-                    report.domain_samples,
-                    report.sites
-                );
-            }
             if rms_omt >= rms_lscm {
                 eprintln!(
                     "warning: OMT did not improve on the conformal input \

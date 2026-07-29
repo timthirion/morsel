@@ -118,15 +118,14 @@ fn omt_reduces_area_distortion_on_curved_patches() {
             "{name}: baseline should have distortion to remove, got {rms_base:.6}"
         );
 
-        let opts = OMTOptions::for_vertex_count(mesh.num_vertices());
-        let (out, report) = omt_with_report(&mesh, &base, &opts).unwrap();
+        let (out, report) = omt_with_report(&mesh, &base, &OMTOptions::default()).unwrap();
         let (_, _, rms_omt) = compute_area_distortion(&mesh, &out);
 
+        // Cells are exact polygons, so they must tile the domain regardless of
+        // how far the weight ascent got.
         assert!(
-            report.is_well_sampled(),
-            "{name}: for_vertex_count should pick an adequate grid, \
-             got {:.1} samples/cell",
-            report.samples_per_cell()
+            report.domain_area > 0.0,
+            "{name}: domain should have positive area"
         );
         assert!(
             rms_omt < 0.6 * rms_base,
@@ -147,8 +146,7 @@ fn omt_leaves_an_isometric_map_alone() {
         let (_, _, rms_base) = compute_area_distortion(&mesh, &base);
         assert!(rms_base < 1e-5);
 
-        let opts = OMTOptions::for_vertex_count(mesh.num_vertices());
-        let out = omt(&mesh, &base, &opts).unwrap();
+        let out = omt(&mesh, &base, &OMTOptions::default()).unwrap();
         let (_, _, rms_omt) = compute_area_distortion(&mesh, &out);
 
         assert!(
@@ -165,7 +163,7 @@ fn omt_leaves_an_isometric_map_alone() {
 fn all_methods_return_finite_normalized_uvs() {
     let mesh = paraboloid(6);
     let base = lscm(&mesh, &LSCMOptions::default()).unwrap();
-    let omt_uvs = omt(&mesh, &base, &OMTOptions::for_vertex_count(mesh.num_vertices())).unwrap();
+    let omt_uvs = omt(&mesh, &base, &OMTOptions::default()).unwrap();
     let arap_uvs = arap(&mesh, &ARAPOptions::default()).unwrap();
 
     for (name, uvs) in [("lscm", &base), ("omt", &omt_uvs), ("arap", &arap_uvs)] {

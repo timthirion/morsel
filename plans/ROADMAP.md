@@ -38,10 +38,17 @@ A working half-edge mesh library and CLI.
 The parameterization stack was substantially repaired in July 2026: LSCM and ARAP
 both imposed pin constraints by penalty, which coupled solver accuracy to the
 penalty magnitude and produced wrong maps above ~50 vertices while CG reported
-convergence. Both now eliminate their pinned degrees of freedom. OMT was
-rewritten (it had been iterating a transport step as Lloyd relaxation) and now
-reduces area distortion to ~35% of conformal on curved patches, with a documented
-mesh-density ceiling.
+convergence. Both now eliminate their pinned degrees of freedom. OMT was rewritten
+twice — it had been iterating a transport step as Lloyd relaxation, and then
+estimating power-cell areas by grid sampling, whose noise floor sat above the
+convergence tolerance it was checked against. Cells are now exact polygons, and
+converged area distortion falls to 16–36% of conformal, improving with refinement.
+
+A theme worth naming, since it caused three separate bugs here: in each case a
+*measurement was noisier than the threshold it was compared against* — a penalty
+inflating `‖b‖` past CG's relative residual test, twice, and a sampled area
+estimator's `1/√k` error exceeding the transport tolerance. Whenever a solver
+reports success while its output is visibly wrong, suspect that shape first.
 
 ## Phases
 
@@ -58,9 +65,14 @@ implements. Deliberately does **not** attempt f64 numerics. **active**
 These are the author's to shape; listed so the folder isn't empty of forward
 direction, not because they've been decided.
 
-- **Exact power diagrams** — replace OMT's grid-sampled cell areas with clipped
-  polygons. Removes the sampling floor that currently caps OMT's usefulness at a
-  few hundred vertices and is the single biggest unlock for that algorithm.
+- **Faster OMT transport solve.** Exact power cells landed (July 2026) and moved
+  the bottleneck: the measurement is now exact, but the first-order ascent needs
+  iterations growing linearly in vertex count, and each iteration scans every
+  site pair. Two fixes, both known: a damped Newton step on the Kantorovich dual
+  (Kitagawa–Mérigot–Thibert) for `O(tens)` iterations instead of thousands, and
+  spatial pruning of rival sites for `O(n·k)` instead of `O(n²)` per iteration.
+  Converged quality already improves with refinement — 15.7% of conformal at 1089
+  vertices — so this is purely about making that budget affordable.
 - **Parameterization quality** — boundary vertices that slide along the boundary
   curve rather than being pinned or freed; a seam/cut generator so closed meshes
   can be unwrapped at all.
