@@ -11,8 +11,8 @@
 //! - **Half-edge data structure**: O(1) adjacency queries with type-safe indices
 //! - **Flexible indexing**: Support for 16-bit, 32-bit, and 64-bit indices
 //! - **Multiple file formats**: OBJ, STL, PLY, glTF
-//! - **Robust predicates**: Integration with exactum for exact geometric predicates
-//! - **Approximation algorithms**: Integration with approxum for efficient approximate operations
+//! - **Exact polygon geometry**: `approxum` polygons back the power-diagram cell
+//!   areas and centroids in area-preserving parameterization
 //!
 //! ## Quick Start
 //!

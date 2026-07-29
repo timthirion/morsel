@@ -206,13 +206,13 @@ It is `#![forbid(unsafe_code)]` with zero dependencies — about the friendliest
 input a Rust-extraction toolchain could be handed.
 
 One clarification, since it affects how much this belongs in *morsel's* plans:
-`exactum` is declared as a path dependency in `Cargo.toml`, but no morsel source
-file calls it — the only mentions are aspirational lines in `lib.rs`'s module
-docs. So it is in the build graph, not on any code path, and verifying it would
-not currently discharge any risk in morsel. The argument for spiking there is
-purely that it is the easiest place to learn whether the toolchain works, not
-that morsel depends on its correctness. (The unused path dependencies to
-`exactum` and `approxum` are worth either using or dropping, separately.)
+morsel does **not** depend on `exactum`. It was a declared-but-uncalled path
+dependency and was dropped in July 2026 (see `AGENTS.md` for why re-adopting it
+is a real project rather than a switch). So verifying it discharges no risk here.
+The argument for spiking there is purely that it is the easiest place to learn
+whether the toolchain works — which is still a good argument, just not a morsel
+one. If the spike succeeds, the verification work itself belongs in that repo's
+own `plans/`.
 
 Recommendation: run the Aeneas pipeline spike (Tier B item 1) against `exactum`
 rather than morsel. If the toolchain works there, port the technique here for the

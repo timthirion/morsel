@@ -16,9 +16,6 @@ rayon = "1.10"
 # Linear algebra
 nalgebra = "0.33"
 
-# Exact geometric predicates
-exactum = { path = "../exactum" }
-
 # Approximate geometry operations
 approxum = { path = "../approxum" }
 

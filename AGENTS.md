@@ -11,38 +11,45 @@ see [`plans/README.md`](plans/README.md) for the template and conventions.
 
 ### Local Path Dependencies (not published to crates.io)
 
-- **exactum** (`../exactum`): Exact computational geometry library using integer/rational arithmetic
-  - Pure Rust, zero dependencies, `#![forbid(unsafe_code)]`
-  - Provides: `Point2<T>`/`Point3<T>` with integer coordinates (i32, i64, i128)
-  - `Rational` type for exact fractional results
-  - Geometric predicates: `orient2d`, `orient3d`, `incircle`, `insphere`
-  - Algorithms: convex hull, Delaunay triangulation, Voronoi, polygon booleans, sweep line
-  - Spatial structures: KdTree, Quadtree, Octree, RTree
-
 - **approxum** (`../approxum`): Floating-point approximation geometry library
-  - Generic over `F: Float` (f32/f64)
+  - Generic over `F: Float` (f32/f64), so it speaks the same language as mesh
+    vertex coordinates
   - Curves: Bezier, B-spline, NURBS, arcs, Catmull-Rom, Hermite
-  - Polygon ops: booleans, offsetting, triangulation, visibility, straight skeleton
+  - Polygon ops: booleans, clipping, offsetting, triangulation, visibility,
+    straight skeleton; `polygon_area` / `polygon_centroid`
   - Simplification: RDP, Visvalingam, topology-preserving
   - Sampling: Poisson disk, Sobol, Halton sequences
   - Spatial: KdTree, BVH
   - Distance: SDFs, distance transforms, Hausdorff/Frechet metrics
   - I/O: SVG parsing/export
 
-### How to Use Both
+**Currently used for:** exact power-diagram cell areas and centroids in
+`algo::parameterize::omt` (`polygon_area`, `polygon_centroid`). Its
+`sutherland_hodgman` is *not* used — it loses area on degenerate configurations,
+where cell edges run exactly parallel to triangle edges and a vertex sits on the
+boundary, because the underlying line-line intersection degenerates and drops
+vertices. `omt` clips with half-planes instead. See that module's docs.
 
-- **Approxum**: Primary use for mesh vertex coordinates, curves, sampling, distance computations. Meshes live in floating-point space.
-- **Exactum**: Robust geometric predicates for *decisions* during algorithms. When determining orientation, incircle tests, etc., convert to exact arithmetic to avoid floating-point failures.
+Good candidates not yet wired up: `distance` (Hausdorff/Frechet) for a
+decimation and remeshing quality harness, `sampling::poisson_disk` for surface
+sampling, `triangulation` for hole filling, `simplify` for UV seam curves.
 
-Pattern:
-```rust
-// Vertices stored as f64
-let mesh: HalfEdgeMesh = ...;
+### A note on exact arithmetic
 
-// But when Delaunay needs an incircle test, convert to exact:
-let a = Point2::new(v0.x as i64, v0.y as i64);
-let result = exactum::incircle(a, b, c, d);  // robust decision
-```
+`exactum` was a path dependency here and was dropped in July 2026 — nothing in
+morsel called it. It is worth revisiting only as a deliberate project, because
+its predicates take **integer** coordinates (`Point2<i64>`, i32→i64→i128
+widening), while mesh vertices are `Point3<f64>`. There is no drop-in conversion:
+this repo previously documented `Point2::new(v.x as i64, v.y as i64)`, which
+truncates coordinates in `[-1, 1]` to `0` or `±1` and cannot work. Using it means
+committing to a snap-rounding layer with an explicit scale factor, which is a
+real design decision and not free.
+
+Where it would genuinely pay off is sign decisions whose *consistency* matters
+more than their precision — UV triangle flips, Delaunay edge flips in remeshing,
+self-intersection — since a wrong sign there is a topological failure rather than
+a small numeric error. Note it is not the same tool as Shewchuk-style adaptive
+predicates, which take floats directly.
 
 ## Architectural Decisions
 
