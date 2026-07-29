@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# morsel depends on `approxum` by relative path (`../approxum`), so every job
+# checks both repositories out as siblings and works inside `morsel/`.
+#
+# If `approxum` is private, the default `GITHUB_TOKEN` will not be able to read
+# it — add a PAT with repo scope as a secret and pass it to that checkout step as
+# `token: ${{ secrets.<NAME> }}`.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: morsel
+      - uses: actions/checkout@v4
+        with:
+          repository: timthirion/approxum
+          path: approxum
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: morsel
+      - name: Test
+        working-directory: morsel
+        run: cargo test --features cli
+      # The viewer has no tests and needs a GPU to run, but it should still be
+      # kept compiling.
+      - name: Check the viewer builds
+        working-directory: morsel
+        run: cargo check --features viewer
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: morsel
+      - uses: actions/checkout@v4
+        with:
+          repository: timthirion/approxum
+          path: approxum
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: morsel
+      # Each feature set is linted separately: feature-gated code is otherwise
+      # never seen, and `-D warnings` also enforces the crate's
+      # `#![warn(missing_docs)]`.
+      - name: Clippy (library only)
+        working-directory: morsel
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (cli)
+        working-directory: morsel
+        run: cargo clippy --features cli --all-targets -- -D warnings
+      - name: Clippy (viewer)
+        working-directory: morsel
+        run: cargo clippy --features viewer --all-targets -- -D warnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --check

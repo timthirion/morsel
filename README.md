@@ -6,6 +6,8 @@
   <img alt="morsel" src="images/morsel_banner_dark.svg">
 </picture>
 
+[![CI](https://github.com/timthirion/morsel/actions/workflows/ci.yml/badge.svg)](https://github.com/timthirion/morsel/actions/workflows/ci.yml)
+
 Mesh processing in Rust
 
 > 📐 Direction lives in [`plans/ROADMAP.md`](plans/ROADMAP.md); conventions live in

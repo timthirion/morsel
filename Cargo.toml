@@ -20,7 +20,7 @@ nalgebra = "0.33"
 approxum = { path = "../approxum" }
 
 # File I/O
-tobj = "4.0"           # OBJ format
+tobj = { version = "4.0", features = ["use_f64"] }  # OBJ format; use_f64 keeps positions at full precision
 stl_io = "0.7"         # STL format
 ply-rs = "0.1"         # PLY format
 gltf = "1.4"           # glTF format

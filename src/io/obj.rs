@@ -72,19 +72,18 @@ pub fn load_with_uvs<P: AsRef<Path>, I: MeshIndex>(
     for model in &models {
         let mesh = &model.mesh;
 
-        // Extract vertices
+        // Extract vertices. `tobj` is built with `use_f64`, so these are already
+        // `f64` and no cast is wanted — which also means that if that feature is
+        // ever dropped this stops compiling rather than quietly narrowing every
+        // coordinate to `f32`.
         for chunk in mesh.positions.chunks(3) {
-            all_vertices.push(Point3::new(
-                chunk[0] as f64,
-                chunk[1] as f64,
-                chunk[2] as f64,
-            ));
+            all_vertices.push(Point3::new(chunk[0], chunk[1], chunk[2]));
         }
 
         // Extract UV coordinates if present
         if mesh.texcoords.len() == mesh.positions.len() / 3 * 2 {
             for chunk in mesh.texcoords.chunks(2) {
-                all_uvs.push(Point2::new(chunk[0] as f64, chunk[1] as f64));
+                all_uvs.push(Point2::new(chunk[0], chunk[1]));
             }
         } else {
             has_uvs = false;
