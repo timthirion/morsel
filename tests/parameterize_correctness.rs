@@ -256,3 +256,25 @@ fn lscm_is_invariant_to_pin_scale() {
         );
     }
 }
+
+/// With ARAP's pinned vertex eliminated rather than penalized, the CG tolerance
+/// is a meaningful error proxy: accuracy tracks it and does not decay with mesh
+/// size. The penalty formulation this replaces scored `rms = 20.5` here.
+#[test]
+fn arap_accuracy_tracks_tolerance_at_every_size() {
+    for n in [4usize, 8, 16] {
+        let mesh = flat_grid(n);
+        for tol in [1e-8f64, 1e-10] {
+            let opts = ARAPOptions::default().with_cg_tolerance(tol);
+            let uvs = arap(&mesh, &opts).unwrap();
+            let (_, _, rms) = compute_area_distortion(&mesh, &uvs);
+            // Generous factor over `tol` itself, but tight enough that a
+            // reintroduced penalty term (which decouples the two) would fail.
+            assert!(
+                rms < 1e4 * tol,
+                "ARAP on a flat {n}x{n} grid at tol={tol:.0e} should track the \
+                 tolerance, got rms={rms:.3e}"
+            );
+        }
+    }
+}

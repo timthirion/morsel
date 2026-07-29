@@ -161,11 +161,16 @@ impl CsrMatrix {
 ///
 /// Requires A to be symmetric positive definite.
 ///
-/// The diagonal preconditioner matters a great deal for the LSCM system, whose
-/// pin constraints are imposed by a large penalty on two diagonal entries. That
-/// penalty inflates the condition number by its own magnitude, so unpreconditioned
-/// CG needs on the order of `√penalty` iterations to make progress. Scaling the
-/// diagonal away removes that factor and leaves only the mesh's own conditioning.
+/// The diagonal preconditioner earns its place on the parameterization systems,
+/// which are cotangent-weighted Laplacians (or their normal equations). Cotangent
+/// weights vary with triangle shape, so the diagonal varies with vertex valence
+/// and local element quality; scaling it away leaves CG facing only the mesh's
+/// intrinsic conditioning.
+///
+/// It also rescues systems whose diagonal has been inflated deliberately — a pin
+/// imposed by a large penalty, say — but that is a workaround, not a fix. LSCM
+/// and ARAP both eliminate their pinned degrees of freedom instead, so no such
+/// term reaches this solver.
 ///
 /// # Arguments
 ///

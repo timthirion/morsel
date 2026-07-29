@@ -29,9 +29,19 @@ pub struct ARAPOptions {
     pub iterations: usize,
 
     /// Maximum iterations for the conjugate gradient solver (per global step).
+    ///
+    /// With the pin eliminated the system is a plain cotangent Laplacian, so the
+    /// iteration count grows with refinement and nothing else. The allowance is
+    /// generous because each iteration is one sparse mat-vec, and exceeding it is
+    /// reported rather than passed off as a result.
     pub max_cg_iterations: usize,
 
-    /// Convergence tolerance for the CG solver.
+    /// Convergence tolerance for the CG solver, as a relative residual.
+    ///
+    /// Since the pin is imposed exactly rather than by a penalty, this is a
+    /// meaningful error proxy and the resulting distortion tracks it directly.
+    /// On a flat grid, whose exact answer is the identity, `1e-10` yields ~1e-11
+    /// of area distortion, roughly independently of mesh size.
     pub cg_tolerance: f64,
 
     /// Whether to use LSCM as initial parameterization.
@@ -43,8 +53,8 @@ impl Default for ARAPOptions {
     fn default() -> Self {
         Self {
             iterations: 10,
-            max_cg_iterations: 1000,
-            cg_tolerance: 1e-12,
+            max_cg_iterations: 20_000,
+            cg_tolerance: 1e-10,
             use_lscm_init: true,
         }
     }
@@ -138,51 +148,56 @@ pub fn arap<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &ARAPOptions) -> Resu
     // Precompute cotangent weights for all edges
     let cot_weights = compute_cotangent_weights(&vertices, &faces);
 
-    // Precompute the global system matrix (Laplacian with cotangent weights)
-    // This matrix doesn't change between iterations
-    let (system_matrix, pinned_vertex) =
-        build_arap_system_matrix(&faces, n_vertices, &cot_weights, &boundary);
+    // Precompute the global system matrix (Laplacian with cotangent weights).
+    // Neither the matrix nor its reduction changes between iterations.
+    let laplacian = build_arap_system_matrix(&faces, &cot_weights);
+    let pinned_vertex = boundary[0];
+    let reduction = PinnedReduction::new(&laplacian, n_vertices, pinned_vertex);
+
+    // The pinned vertex holds its initial position for the whole solve.
+    let pinned_uv = uv_coords[pinned_vertex];
 
     // Store original 2D edge vectors (from flattening 3D triangles)
     let original_edges = compute_original_edges(&vertices, &faces);
 
-    // ARAP iteration
-    for _iter in 0..options.iterations {
-        // Local step: compute best-fit rotations for each triangle
-        let rotations = compute_local_rotations(&uv_coords, &faces, &original_edges);
+    // A mesh with a single vertex has nothing free to solve for.
+    if reduction.n_free() > 0 {
+        // ARAP iteration
+        for _iter in 0..options.iterations {
+            // Local step: compute best-fit rotations for each triangle
+            let rotations = compute_local_rotations(&uv_coords, &faces, &original_edges);
 
-        // Global step: solve for new UV coordinates
-        let rhs = build_arap_rhs(
-            &faces,
-            n_vertices,
-            &cot_weights,
-            &original_edges,
-            &rotations,
-            pinned_vertex,
-            &uv_coords,
-        );
+            // Global step: solve for new UV coordinates
+            let (rhs_u, rhs_v) = build_arap_rhs(
+                &faces,
+                n_vertices,
+                &cot_weights,
+                &original_edges,
+                &rotations,
+            );
 
-        // Solve for u coordinates
-        let u_solution = preconditioned_conjugate_gradient(
-            &system_matrix,
-            &rhs.0,
-            None,
-            options.max_cg_iterations,
-            options.cg_tolerance,
-        )?;
+            let solve = |full: &DVector<f64>, pinned_value: f64| {
+                preconditioned_conjugate_gradient(
+                    &reduction.matrix,
+                    &reduction.reduce_rhs(full, pinned_value),
+                    None,
+                    options.max_cg_iterations,
+                    options.cg_tolerance,
+                )
+            };
 
-        // Solve for v coordinates
-        let v_solution = preconditioned_conjugate_gradient(
-            &system_matrix,
-            &rhs.1,
-            None,
-            options.max_cg_iterations,
-            options.cg_tolerance,
-        )?;
+            let u_solution = solve(&rhs_u, pinned_uv.x)?;
+            let v_solution = solve(&rhs_v, pinned_uv.y)?;
 
-        // Update UV coordinates
-        for i in 0..n_vertices {
-            uv_coords[i] = Point2::new(u_solution[i], v_solution[i]);
+            // Update UV coordinates. The pinned vertex is not part of the
+            // solution vector, so it keeps its value automatically.
+            let mut us: Vec<f64> = uv_coords.iter().map(|p| p.x).collect();
+            let mut vs: Vec<f64> = uv_coords.iter().map(|p| p.y).collect();
+            reduction.scatter(&u_solution, &mut us);
+            reduction.scatter(&v_solution, &mut vs);
+            for i in 0..n_vertices {
+                uv_coords[i] = Point2::new(us[i], vs[i]);
+            }
         }
     }
 
@@ -481,10 +496,8 @@ fn closest_rotation(m: &Matrix2<f64>) -> Matrix2<f64> {
 /// Build the ARAP system matrix (cotangent Laplacian with one pinned vertex).
 fn build_arap_system_matrix(
     faces: &[[usize; 3]],
-    n_vertices: usize,
     cot_weights: &std::collections::HashMap<(usize, usize), f64>,
-    boundary: &[usize],
-) -> (CsrMatrix, usize) {
+) -> Vec<(usize, usize, f64)> {
     let mut triplets: Vec<(usize, usize, f64)> = Vec::new();
 
     // Build cotangent Laplacian
@@ -505,13 +518,104 @@ fn build_arap_system_matrix(
         }
     }
 
-    // Pin one boundary vertex (add large value to diagonal)
-    let pinned = boundary[0];
-    let penalty = 1e6;
-    triplets.push((pinned, pinned, penalty));
+    triplets
+}
 
-    let matrix = CsrMatrix::from_triplets(n_vertices, n_vertices, triplets);
-    (matrix, pinned)
+/// The ARAP global step with its pinned vertex eliminated rather than penalized.
+///
+/// The cotangent Laplacian is singular: its kernel is the constants, since only
+/// differences of coordinates appear in the energy. Pinning one vertex removes
+/// exactly that one-dimensional kernel. Doing it by elimination rather than by a
+/// penalty on the diagonal keeps the condition number the mesh's own and leaves
+/// the CG tolerance meaning what it says — the same coupling that made LSCM
+/// return wrong maps while reporting convergence.
+///
+/// The matrix is the same for `u`, for `v`, and across all ARAP iterations, so it
+/// is factored out here; only the right-hand side changes, and
+/// [`PinnedReduction::reduce_rhs`] folds the pinned column into it each time.
+struct PinnedReduction {
+    /// The Laplacian restricted to free vertices, `L_ff`.
+    matrix: CsrMatrix,
+    /// Global vertex index to reduced index; `None` for the pinned vertex.
+    reduced_index: Vec<Option<usize>>,
+    /// The pinned vertex.
+    pinned: usize,
+    /// Non-zeros of the pinned column over free rows: `(reduced_row, value)`.
+    pinned_column: Vec<(usize, f64)>,
+}
+
+impl PinnedReduction {
+    fn new(triplets: &[(usize, usize, f64)], n_vertices: usize, pinned: usize) -> Self {
+        let mut reduced_index = vec![None; n_vertices];
+        let mut n_free = 0;
+        for v in 0..n_vertices {
+            if v != pinned {
+                reduced_index[v] = Some(n_free);
+                n_free += 1;
+            }
+        }
+
+        // The pinned column can receive several triplets for the same row, so
+        // accumulate before storing.
+        let mut column_acc = vec![0.0; n_free];
+        let mut reduced_triplets = Vec::with_capacity(triplets.len());
+
+        for &(row, col, value) in triplets {
+            let Some(r) = reduced_index[row] else { continue };
+            match reduced_index[col] {
+                Some(c) => reduced_triplets.push((r, c, value)),
+                None => column_acc[r] += value,
+            }
+        }
+
+        let pinned_column = column_acc
+            .into_iter()
+            .enumerate()
+            .filter(|(_, v)| *v != 0.0)
+            .collect();
+
+        Self {
+            matrix: CsrMatrix::from_triplets(n_free, n_free, reduced_triplets),
+            reduced_index,
+            pinned,
+            pinned_column,
+        }
+    }
+
+    fn n_free(&self) -> usize {
+        self.matrix.nrows()
+    }
+
+    /// The vertex held fixed by this reduction.
+    #[allow(dead_code)]
+    fn pinned(&self) -> usize {
+        self.pinned
+    }
+
+    /// Restrict a full right-hand side to the free rows, moving the pinned
+    /// vertex's known contribution across: `rhs_f − L_fp x_p`.
+    fn reduce_rhs(&self, full: &DVector<f64>, pinned_value: f64) -> DVector<f64> {
+        let mut rhs = DVector::zeros(self.n_free());
+        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
+            if let Some(r) = maybe_r {
+                rhs[*r] = full[v];
+            }
+        }
+        for &(r, l_fp) in &self.pinned_column {
+            rhs[r] -= l_fp * pinned_value;
+        }
+        rhs
+    }
+
+    /// Scatter a reduced solution back over the full vertex range, leaving the
+    /// pinned entry untouched.
+    fn scatter(&self, solution: &DVector<f64>, out: &mut [f64]) {
+        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
+            if let Some(r) = maybe_r {
+                out[v] = solution[*r];
+            }
+        }
+    }
 }
 
 /// Build the ARAP right-hand side vectors.
@@ -521,8 +625,6 @@ fn build_arap_rhs(
     cot_weights: &std::collections::HashMap<(usize, usize), f64>,
     original_edges: &[[Vector2<f64>; 3]],
     rotations: &[Matrix2<f64>],
-    pinned_vertex: usize,
-    uv_coords: &[Point2<f64>],
 ) -> (DVector<f64>, DVector<f64>) {
     let mut rhs_u = DVector::zeros(n_vertices);
     let mut rhs_v = DVector::zeros(n_vertices);
@@ -553,11 +655,8 @@ fn build_arap_rhs(
         }
     }
 
-    // Pin constraint
-    let penalty = 1e6;
-    rhs_u[pinned_vertex] += penalty * uv_coords[pinned_vertex].x;
-    rhs_v[pinned_vertex] += penalty * uv_coords[pinned_vertex].y;
-
+    // No pin term here: the pinned vertex is eliminated from the system rather
+    // than penalized into it. See `PinnedReduction`.
     (rhs_u, rhs_v)
 }
 
