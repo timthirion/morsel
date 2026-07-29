@@ -168,6 +168,16 @@ pub fn lscm<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &LSCMOptions) -> Resu
         return Err(MeshError::NoBoundary);
     }
 
+    // Disk topology means *one* boundary loop. An annulus has boundary but cannot
+    // be mapped bijectively onto a planar disk, and the solver does not fail
+    // loudly when asked to: on a cylinder it returns a map with collapsed
+    // triangles (minimum area ratio 0.000) while reporting success. Refuse
+    // instead — the error this function already documented, now actually checked.
+    let loops = mesh.boundary_loop_count();
+    if loops != 1 {
+        return Err(MeshError::NotADisk { loops });
+    }
+
     // Determine pinned vertices
     let (pin0, pin1) = match &options.pin_strategy {
         PinStrategy::Automatic => select_farthest_boundary_pair(&vertices, &boundary),

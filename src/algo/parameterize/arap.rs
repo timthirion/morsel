@@ -133,6 +133,13 @@ pub fn arap<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &ARAPOptions) -> Resu
         return Err(MeshError::NoBoundary);
     }
 
+    // Same disk requirement as LSCM: the Tutte fallback and the LSCM
+    // initialisation both map onto a disk, which an annulus has no bijection to.
+    let loops = mesh.boundary_loop_count();
+    if loops != 1 {
+        return Err(MeshError::NotADisk { loops });
+    }
+
     // Get initial parameterization
     let mut uv_coords = if options.use_lscm_init {
         let lscm_options = LSCMOptions::default()

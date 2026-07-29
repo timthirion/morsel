@@ -295,6 +295,37 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
         false
     }
 
+    /// Count the boundary loops (holes) of the mesh.
+    ///
+    /// `0` means closed. `1` means disk topology, which is what the
+    /// parameterization methods require. More than one means the surface has
+    /// several holes and cannot be flattened to a disk without a cut.
+    ///
+    /// Note this is independent of the Euler characteristic: an annulus and a
+    /// torus both have `χ = 0`, but the annulus has two boundary loops and the
+    /// torus none.
+    pub fn boundary_loop_count(&self) -> usize {
+        let mut visited = vec![false; self.num_halfedges()];
+        let mut loops = 0;
+
+        for he in self.halfedge_ids() {
+            if visited[he.index()] || !self.is_boundary_halfedge(he) {
+                continue;
+            }
+            loops += 1;
+            let mut cur = he;
+            loop {
+                visited[cur.index()] = true;
+                cur = self.next(cur);
+                if cur == he || visited[cur.index()] {
+                    break;
+                }
+            }
+        }
+
+        loops
+    }
+
     /// Check if an edge (represented by one of its half-edges) is on the boundary.
     #[inline]
     pub fn is_boundary_edge(&self, he: HalfEdgeId<I>) -> bool {

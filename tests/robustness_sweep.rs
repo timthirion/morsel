@@ -281,6 +281,17 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     ("control_tetrahedron", "param:arap", Outcome::Refused),
     ("control_tetrahedron", "param:lscm", Outcome::Refused),
     ("control_tetrahedron", "param:omt", Outcome::Refused),
+    // Two boundary loops, so not a disk. These were `Ok` until July 2026, when
+    // LSCM and ARAP started checking the disk requirement their errors already
+    // claimed. They previously returned a degenerate map — on a cylinder, one with
+    // collapsed triangles (minimum area ratio 0.000) — while reporting success.
+    ("annulus_two_boundary_loops", "param:arap", Outcome::Refused),
+    ("annulus_two_boundary_loops", "param:lscm", Outcome::Refused),
+    ("annulus_two_boundary_loops", "param:omt", Outcome::Refused),
+    // Two disjoint triangles are two boundary loops too, so equally not a disk.
+    ("two_components", "param:arap", Outcome::Refused),
+    ("two_components", "param:lscm", Outcome::Refused),
+    ("two_components", "param:omt", Outcome::Refused),
     // Absolute rather than scale-relative thresholds. Left alone deliberately:
     // epsilon tuning is a rabbit hole and refusing is a safe failure.
     ("tiny_scale", "geodesic:heat", Outcome::Refused),

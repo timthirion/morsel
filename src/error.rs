@@ -101,6 +101,16 @@ pub enum MeshError {
     /// Mesh has no boundary (required for parameterization).
     #[error("mesh has no boundary (parameterization requires disk topology)")]
     NoBoundary,
+
+    /// The mesh has boundary but is not a disk, so it cannot be flattened.
+    #[error(
+        "mesh is not a disk: it has {loops} boundary loops, and flattening requires \
+         exactly one. Cut the surface to merge the holes into a single boundary first."
+    )]
+    NotADisk {
+        /// The number of boundary loops found.
+        loops: usize,
+    },
 }
 
 impl MeshError {
