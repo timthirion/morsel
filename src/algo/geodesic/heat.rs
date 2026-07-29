@@ -6,7 +6,9 @@
 
 use nalgebra::{DVector, Point3, Vector3};
 
-use crate::algo::parameterize::sparse::{conjugate_gradient, CsrMatrix};
+use crate::algo::parameterize::sparse::{
+    preconditioned_conjugate_gradient, CsrMatrix, PinnedReduction,
+};
 use crate::error::Result;
 use crate::mesh::{HalfEdgeMesh, MeshIndex, VertexId};
 
@@ -15,14 +17,49 @@ use super::GeodesicResult;
 /// Options for the heat method geodesic distance computation.
 #[derive(Debug, Clone)]
 pub struct HeatMethodOptions {
-    /// Time step parameter for heat diffusion.
-    /// If None, automatically computed as h^2 where h is the mean edge length.
+    /// Time step for the heat diffusion, `t`.
+    ///
+    /// If `None`, defaults to `10 h²` where `h` is the mean edge length.
+    ///
+    /// The multiplier matters more than it looks, and `h²` — the bare short-time
+    /// limit — is the wrong choice. Heat decays as `exp(-d²/4t)`, so a small `t`
+    /// puts the far field below what the linear solve can resolve: at `t = h²` on a
+    /// 6401-vertex cap the solution at distance `0.5` is around `exp(-156)`, some 58
+    /// orders of magnitude beneath the solver's `1e-10` residual, and therefore
+    /// numerical noise whose gradient direction is meaningless. Refining the mesh
+    /// shrinks `t` and makes it worse.
+    ///
+    /// Measured mean relative error against exact geodesics on a spherical cap,
+    /// source off-centre so the field is not radially symmetric:
+    ///
+    /// | vertices | `t = h²` | `t = 10 h²` | `t = 100 h²` |
+    /// |----------|----------|-------------|--------------|
+    /// | 101      | −7.0%    | −5.9%       | −5.8%        |
+    /// | 401      | −4.1%    | −2.3%       | −1.5%        |
+    /// | 1601     | −6.1%    | −0.8%       | +0.6%        |
+    /// | 6401     | **−27%** | **−0.3%**   | +1.2%        |
+    ///
+    /// At `h²` the error *grows* with refinement, which is a diverging method. At
+    /// `10 h²` it converges monotonically toward zero, which is what the heat
+    /// method is supposed to do. Beyond that, over-smoothing sets in and the error
+    /// settles at a small positive bias.
     pub time_step: Option<f64>,
 
     /// Maximum iterations for the conjugate gradient solver.
+    ///
+    /// The Poisson stage solves against a cotangent Laplacian, whose condition
+    /// number grows with refinement, so the iteration count has to as well. The
+    /// old default of 1000 was already insufficient at 6401 vertices, where it
+    /// left enough solver error to make the method look *divergent* — the measured
+    /// error stopped shrinking under refinement and turned back up. An unused
+    /// allowance costs nothing, since each iteration is one sparse mat-vec.
     pub max_cg_iterations: usize,
 
-    /// Convergence tolerance for the CG solver.
+    /// Convergence tolerance for the CG solver, as a relative residual.
+    ///
+    /// Tightened alongside the iteration cap for the same reason. Note the far
+    /// field of the heat solution is genuinely tiny — see [`Self::time_step`] —
+    /// so residual tolerance and time step have to be chosen together.
     pub cg_tolerance: f64,
 }
 
@@ -30,8 +67,8 @@ impl Default for HeatMethodOptions {
     fn default() -> Self {
         Self {
             time_step: None,
-            max_cg_iterations: 1000,
-            cg_tolerance: 1e-8,
+            max_cg_iterations: 20_000,
+            cg_tolerance: 1e-10,
         }
     }
 }
@@ -100,15 +137,13 @@ fn build_mass_matrix<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> DVector<f64> {
     let n = mesh.num_vertices();
     let mut mass = DVector::zeros(n);
 
-    for f in mesh.face_ids() {
-        let area = mesh.face_area(f);
-        let [v0, v1, v2] = mesh.face_triangle(f);
-
-        // Each vertex gets 1/3 of the triangle area
-        let contribution = area / 3.0;
-        mass[v0.index()] += contribution;
-        mass[v1.index()] += contribution;
-        mass[v2.index()] += contribution;
+    // Mixed Voronoi area, not barycentric thirds. The mass matrix has to pair with
+    // the operator it accompanies, and the cotangent Laplacian is derived from the
+    // mixed-Voronoi dual cells. Using `area / 3` instead mismatches the two, which
+    // biased recovered distances by several percent in a way that did not shrink
+    // under refinement — the same inconsistency that broke OMT's mass lumping.
+    for v in mesh.vertex_ids() {
+        mass[v.index()] = crate::algo::curvature::mixed_voronoi_area(mesh, v);
     }
 
     mass
@@ -214,7 +249,7 @@ fn solve_heat<I: MeshIndex>(
     }
 
     // Solve (M + t*L) * u = delta
-    conjugate_gradient(
+    preconditioned_conjugate_gradient(
         heat_matrix,
         &rhs,
         None,
@@ -255,9 +290,19 @@ fn compute_normalized_gradient<I: MeshIndex>(
             Vector3::zeros()
         };
 
-        // Normalize and negate: X = -grad / |grad|
+        // Normalize and negate: X = -grad / |grad|.
+        //
+        // The threshold has to be near the bottom of the f64 range, not a
+        // "small number" like 1e-10. Heat decays as exp(-d^2 / 4t), and with the
+        // default t = h^2 the far field is genuinely minute: on a 6401-vertex cap,
+        // h is about 0.02, so at distance 0.5 the solution is around exp(-156),
+        // i.e. 1e-68. That is a perfectly representable normal double whose
+        // direction is exact, but a 1e-10 cutoff discarded it and set X to zero
+        // across most of the mesh — flattening phi and underestimating distance by
+        // 33% at that resolution, worse the finer the mesh, since refining shrinks
+        // t and steepens the decay.
         let grad_norm = grad.norm();
-        let normalized = if grad_norm > 1e-10 {
+        let normalized = if grad_norm > 1e-300 && grad_norm.is_finite() {
             -grad / grad_norm
         } else {
             Vector3::zeros()
@@ -267,6 +312,36 @@ fn compute_normalized_gradient<I: MeshIndex>(
     }
 
     gradients
+}
+
+/// Mark the vertices reachable from any source by walking mesh edges.
+///
+/// Used to keep the heat method's output honest on a disconnected mesh: anything
+/// outside a source's component has no path to it.
+fn reachable_from_sources<I: MeshIndex>(
+    mesh: &HalfEdgeMesh<I>,
+    sources: &[VertexId<I>],
+) -> Vec<bool> {
+    let mut seen = vec![false; mesh.num_vertices()];
+    let mut stack: Vec<VertexId<I>> = Vec::new();
+
+    for &s in sources {
+        if !seen[s.index()] {
+            seen[s.index()] = true;
+            stack.push(s);
+        }
+    }
+
+    while let Some(v) = stack.pop() {
+        for n in mesh.vertex_neighbors(v) {
+            if !seen[n.index()] {
+                seen[n.index()] = true;
+                stack.push(n);
+            }
+        }
+    }
+
+    seen
 }
 
 /// Compute the integrated divergence of the vector field at each vertex.
@@ -378,7 +453,9 @@ pub fn heat_method_multiple<I: MeshIndex>(
 
     // Step 1: Compute time step
     let h = compute_mean_edge_length(mesh);
-    let t = options.time_step.unwrap_or(h * h);
+    // 10 h², not h². See `HeatMethodOptions::time_step` for the measurements
+    // behind the multiplier.
+    let t = options.time_step.unwrap_or(10.0 * h * h);
 
     // Step 2: Build mass matrix and system matrices
     let mass = build_mass_matrix(mesh);
@@ -397,17 +474,66 @@ pub fn heat_method_multiple<I: MeshIndex>(
     // Note: Our L has convention L[i,i] > 0, L[i,j] < 0, which corresponds to -Δ.
     // The heat method requires Δφ = div(X), so we solve Lφ = -div(X).
     let neg_div = -&div;
-    let phi = conjugate_gradient(
-        &laplacian,
-        &neg_div,
-        None,
-        options.max_cg_iterations,
-        options.cg_tolerance,
-    )?;
 
-    // Step 7: Shift so minimum is 0
-    let min_phi = phi.iter().cloned().fold(f64::INFINITY, f64::min);
-    let distances: Vec<f64> = phi.iter().map(|&p| p - min_phi).collect();
+    // The cotangent Laplacian is singular: only differences of `phi` appear, so
+    // constants lie in its kernel. Conjugate gradient cannot drive the relative
+    // residual below that null-space contribution, so it reported
+    // `ConvergenceFailed` on every mesh larger than a few vertices regardless of
+    // the iteration budget — 100,000 iterations still failed on a 178-vertex
+    // sphere.
+    //
+    // Pinning one vertex removes exactly that one-dimensional kernel, and it costs
+    // nothing here because the gauge is irrelevant: step 7 below shifts the whole
+    // field so its minimum is zero, discarding any constant offset anyway.
+    let phi = {
+        let reduction = PinnedReduction::new(&laplacian.triplets(), n, 0);
+        if reduction.n_free() == 0 {
+            DVector::zeros(n)
+        } else {
+            let reduced = reduction.reduce_rhs(&neg_div, 0.0);
+            let solved = preconditioned_conjugate_gradient(
+                &reduction.matrix,
+                &reduced,
+                None,
+                options.max_cg_iterations,
+                options.cg_tolerance,
+            )?;
+            let mut full = vec![0.0; n];
+            reduction.scatter(&solved, &mut full);
+            DVector::from_vec(full)
+        }
+    };
+
+    // Step 7: Restrict to the sources' connected components, then shift so the
+    // minimum is 0.
+    //
+    // Both halves matter on a disconnected mesh. A vertex in another component has
+    // no path to any source, so its distance is infinite — the same answer Dijkstra
+    // gives — but the Laplacian is block diagonal there and pinning one vertex only
+    // makes one block definite, so `phi` in the other blocks is arbitrary. Leaving
+    // it in reported those vertices as reachable at plausible-looking distances,
+    // and, worse, let their arbitrary values set the minimum used to shift the
+    // component that actually contains the source.
+    let reachable = reachable_from_sources(mesh, sources);
+
+    let min_phi = phi
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| reachable[*i])
+        .map(|(_, &p)| p)
+        .fold(f64::INFINITY, f64::min);
+
+    let distances: Vec<f64> = phi
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| {
+            if reachable[i] {
+                p - min_phi
+            } else {
+                f64::INFINITY
+            }
+        })
+        .collect();
 
     // No predecessors for heat method (not a graph algorithm)
     Ok(GeodesicResult::new(distances, None))

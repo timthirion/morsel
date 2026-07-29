@@ -193,7 +193,15 @@ fn algorithms() -> Vec<Probe> {
                     &geodesic::HeatMethodOptions::default(),
                 )
                 .map_err(|e| e.to_string())?;
-                check_field(r.distances(), "heat")
+                // As with Dijkstra, a vertex in another connected component is
+                // legitimately at infinite distance; only NaN is a defect.
+                let finite: Vec<f64> = r
+                    .distances()
+                    .iter()
+                    .copied()
+                    .filter(|d| !d.is_infinite())
+                    .collect();
+                check_field(&finite, "heat")
             })
         }),
         ("param:cylindrical", |m| {
@@ -294,10 +302,10 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     ("two_components", "param:omt", Outcome::Refused),
     // Absolute rather than scale-relative thresholds. Left alone deliberately:
     // epsilon tuning is a rabbit hole and refusing is a safe failure.
-    ("tiny_scale", "geodesic:heat", Outcome::Refused),
     ("tiny_scale", "param:omt", Outcome::Refused),
-    // A zero-area face leaves the cotangent Laplacian undefined; refusing is right.
-    ("zero_area_face", "geodesic:heat", Outcome::Refused),
+    // `tiny_scale` and `zero_area_face` used to refuse the heat method too. Both
+    // now succeed: the failure was its Poisson solve running out of CG budget, not
+    // anything about the geometry.
 ];
 
 fn baseline() -> BTreeMap<(&'static str, &'static str), Outcome> {

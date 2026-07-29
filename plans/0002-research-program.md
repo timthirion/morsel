@@ -325,9 +325,29 @@ compare numerically. Cheap to design in now, painful to retrofit.
       small self-contained Lean exercise needing only Euler's formula, the
       executable form is already in `tests/omt_dof_deficit.rs`, and it is a good
       first calibration of the toolchain even though it is not a result.
-- [ ] Validate the heat method (`algo/geodesic/heat.rs`, 596 lines, never checked
-      against the paper's error curves) — free calibration of what "matching
-      published numbers" feels like, and it is not exposed in the CLI either.
+- [x] Validate the heat method against exact geodesics. It had **never produced a
+      result on a realistic mesh**: its Poisson stage solved against the raw
+      cotangent Laplacian, which is singular, so CG could not reduce the relative
+      residual below the null-space contribution and reported `ConvergenceFailed`
+      at any budget — 100,000 iterations still failed on a 178-vertex sphere. Four
+      defects, in order of severity:
+      1. **Singular Poisson system**, fixed by eliminating one degree of freedom;
+         the gauge is free because the result is min-shifted anyway.
+      2. **Default time step `t = h²` made the method diverge** — error grew from
+         −7% at 101 vertices to −27% at 6401, because heat decays as `exp(-d²/4t)`
+         and a small `t` pushes the far field below the solver's residual floor.
+         Now `10 h²`, which converges monotonically (−5.9%, −2.3%, −0.8%, −0.3%).
+      3. **CG defaults too loose**, third instance of this shape after LSCM and
+         ARAP: 1000 iterations at `1e-8` left enough solver error at 6401 vertices
+         to make convergence look like divergence.
+      4. **Silent garbage on disconnected meshes** — vertices in other components
+         got plausible finite distances, and their arbitrary values set the minimum
+         used to shift the component that *did* contain the source. Now infinite,
+         matching Dijkstra.
+      Also switched its mass matrix from barycentric thirds to mixed Voronoi, which
+      is the lumping that pairs with a cotangent Laplacian — the same inconsistency
+      that broke OMT, in a second module. Effect not isolated by these tests.
+      `geodesic` is now exposed in the CLI.
 - [ ] Write it up on the blog. Exposition is half of what makes a program legible.
 
 ### M2 — the formal foundation (concurrent from M1)

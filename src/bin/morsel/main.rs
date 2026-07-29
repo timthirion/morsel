@@ -130,6 +130,24 @@ enum Commands {
         material: Option<String>,
     },
 
+    /// Compute geodesic distances from a source vertex
+    Geodesic {
+        /// Input mesh file
+        input: PathBuf,
+
+        /// Source vertex index
+        #[arg(short, long, default_value = "0")]
+        source: usize,
+
+        /// Which solver to use
+        #[arg(short, long, value_enum, default_value = "heat")]
+        method: GeodesicMethod,
+
+        /// Also report the distance to this vertex
+        #[arg(short, long)]
+        target: Option<usize>,
+    },
+
     /// Remesh to improve triangle quality
     Remesh {
         /// Input mesh file
@@ -172,6 +190,18 @@ enum SubdivideMethod {
     Loop,
     /// Catmull-Clark subdivision (for quad meshes)
     CatmullClark,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum GeodesicMethod {
+    /// Heat method (Crane, Weischedel & Wardetzky). Solves two linear systems and
+    /// measures distance across faces, so it is not restricted to travelling along
+    /// edges.
+    Heat,
+    /// Dijkstra over the edge graph. Exact along edges, but it can only
+    /// *overestimate* a geodesic that cuts across a face — by up to 41% on a
+    /// cylinder, where geodesics are helices.
+    Dijkstra,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -271,6 +301,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             material,
         } => {
             cmd_parameterize(&input, &output, method, material.as_deref())?;
+        }
+
+        Commands::Geodesic {
+            input,
+            source,
+            method,
+            target,
+        } => {
+            cmd_geodesic(&input, source, method, target)?;
         }
 
         Commands::Remesh {
@@ -621,6 +660,105 @@ fn cmd_decimate(
     }
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
+
+    Ok(())
+}
+
+fn cmd_geodesic(
+    input: &PathBuf,
+    source: usize,
+    method: GeodesicMethod,
+    target: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use morsel::algo::geodesic;
+    use morsel::mesh::VertexId;
+
+    let mesh: HalfEdgeMesh = io::load(input)?;
+    println!(
+        "Loaded: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
+
+    if source >= mesh.num_vertices() {
+        return Err(format!(
+            "source vertex {source} is out of range (mesh has {} vertices)",
+            mesh.num_vertices()
+        )
+        .into());
+    }
+    if let Some(t) = target {
+        if t >= mesh.num_vertices() {
+            return Err(format!(
+                "target vertex {t} is out of range (mesh has {} vertices)",
+                mesh.num_vertices()
+            )
+            .into());
+        }
+    }
+
+    let src = VertexId::new(source);
+    let start = Instant::now();
+    let result = match method {
+        GeodesicMethod::Heat => {
+            println!("Computing geodesic distances by the heat method...");
+            geodesic::heat_method(&mesh, src, &geodesic::HeatMethodOptions::default())
+                .map_err(|e| format!("heat method failed: {e}"))?
+        }
+        GeodesicMethod::Dijkstra => {
+            println!("Computing graph distances by Dijkstra...");
+            let opts = geodesic::DijkstraOptions {
+                // Only needed to reconstruct a path, so ask for it only when one
+                // was requested.
+                store_predecessors: target.is_some(),
+                ..Default::default()
+            };
+            geodesic::dijkstra(&mesh, src, &opts)
+        }
+    };
+    let elapsed = start.elapsed();
+
+    let reachable = result.reachable_count();
+    println!("Reachable: {reachable} of {} vertices", mesh.num_vertices());
+    if reachable < mesh.num_vertices() {
+        eprintln!(
+            "warning: {} vertices are unreachable from vertex {source}; the mesh has \
+             more than one connected component.",
+            mesh.num_vertices() - reachable
+        );
+    }
+
+    let finite: Vec<f64> = result
+        .distances()
+        .iter()
+        .copied()
+        .filter(|d| d.is_finite())
+        .collect();
+    if !finite.is_empty() {
+        let mean = finite.iter().sum::<f64>() / finite.len() as f64;
+        println!("Distance: mean {:.6}", mean);
+    }
+    if let Some((v, d)) = result.farthest_vertex() {
+        println!("Farthest: vertex {} at {:.6}", v.index(), d);
+    }
+    if let Some(t) = target {
+        let tv = VertexId::new(t);
+        println!("To vertex {t}: {:.6}", result.distance(tv));
+        match result.path_to(tv) {
+            Some(path) => println!("Path: {} vertices along edges", path.len()),
+            None => match method {
+                // The heat method solves for a distance field rather than searching
+                // a graph, so it has no predecessors to walk back.
+                GeodesicMethod::Heat => {
+                    println!("Path: unavailable — the heat method is not a graph search")
+                }
+                GeodesicMethod::Dijkstra => {
+                    println!("Path: unavailable — vertex {t} is unreachable from the source")
+                }
+            },
+        }
+    }
+    println!("Done ({:.2?})", elapsed);
 
     Ok(())
 }

@@ -19,7 +19,7 @@ use crate::error::{MeshError, Result};
 use crate::mesh::{to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 use super::lscm::{lscm, LSCMOptions};
-use super::sparse::{preconditioned_conjugate_gradient, CsrMatrix};
+use super::sparse::{preconditioned_conjugate_gradient, CsrMatrix, PinnedReduction};
 use super::uv::UVMap;
 
 /// Options for ARAP parameterization.
@@ -526,105 +526,6 @@ fn build_arap_system_matrix(
     }
 
     triplets
-}
-
-/// The ARAP global step with its pinned vertex eliminated rather than penalized.
-///
-/// The cotangent Laplacian is singular: its kernel is the constants, since only
-/// differences of coordinates appear in the energy. Pinning one vertex removes
-/// exactly that one-dimensional kernel. Doing it by elimination rather than by a
-/// penalty on the diagonal keeps the condition number the mesh's own and leaves
-/// the CG tolerance meaning what it says — the same coupling that made LSCM
-/// return wrong maps while reporting convergence.
-///
-/// The matrix is the same for `u`, for `v`, and across all ARAP iterations, so it
-/// is factored out here; only the right-hand side changes, and
-/// [`PinnedReduction::reduce_rhs`] folds the pinned column into it each time.
-struct PinnedReduction {
-    /// The Laplacian restricted to free vertices, `L_ff`.
-    matrix: CsrMatrix,
-    /// Global vertex index to reduced index; `None` for the pinned vertex.
-    reduced_index: Vec<Option<usize>>,
-    /// The pinned vertex.
-    pinned: usize,
-    /// Non-zeros of the pinned column over free rows: `(reduced_row, value)`.
-    pinned_column: Vec<(usize, f64)>,
-}
-
-impl PinnedReduction {
-    fn new(triplets: &[(usize, usize, f64)], n_vertices: usize, pinned: usize) -> Self {
-        let mut reduced_index = vec![None; n_vertices];
-        let mut n_free = 0;
-        for (v, slot) in reduced_index.iter_mut().enumerate() {
-            if v != pinned {
-                *slot = Some(n_free);
-                n_free += 1;
-            }
-        }
-
-        // The pinned column can receive several triplets for the same row, so
-        // accumulate before storing.
-        let mut column_acc = vec![0.0; n_free];
-        let mut reduced_triplets = Vec::with_capacity(triplets.len());
-
-        for &(row, col, value) in triplets {
-            let Some(r) = reduced_index[row] else {
-                continue;
-            };
-            match reduced_index[col] {
-                Some(c) => reduced_triplets.push((r, c, value)),
-                None => column_acc[r] += value,
-            }
-        }
-
-        let pinned_column = column_acc
-            .into_iter()
-            .enumerate()
-            .filter(|(_, v)| *v != 0.0)
-            .collect();
-
-        Self {
-            matrix: CsrMatrix::from_triplets(n_free, n_free, reduced_triplets),
-            reduced_index,
-            pinned,
-            pinned_column,
-        }
-    }
-
-    fn n_free(&self) -> usize {
-        self.matrix.nrows()
-    }
-
-    /// The vertex held fixed by this reduction.
-    #[allow(dead_code)]
-    fn pinned(&self) -> usize {
-        self.pinned
-    }
-
-    /// Restrict a full right-hand side to the free rows, moving the pinned
-    /// vertex's known contribution across: `rhs_f − L_fp x_p`.
-    fn reduce_rhs(&self, full: &DVector<f64>, pinned_value: f64) -> DVector<f64> {
-        let mut rhs = DVector::zeros(self.n_free());
-        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
-            if let Some(r) = maybe_r {
-                rhs[*r] = full[v];
-            }
-        }
-        for &(r, l_fp) in &self.pinned_column {
-            rhs[r] -= l_fp * pinned_value;
-        }
-        rhs
-    }
-
-    /// Scatter a reduced solution back over the full vertex range, leaving the
-    /// pinned entry untouched.
-    fn scatter(&self, solution: &DVector<f64>, out: &mut [f64]) {
-        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
-            if let Some(r) = maybe_r {
-                out[v] = solution[*r];
-            }
-        }
-    }
 }
 
 /// Build the ARAP right-hand side vectors.

@@ -147,6 +147,20 @@ impl CsrMatrix {
 }
 
 impl CsrMatrix {
+    /// Enumerate the stored non-zeros as `(row, col, value)`.
+    ///
+    /// Useful for re-deriving a reduced system — see [`PinnedReduction`] — without
+    /// having to keep the original triplet list alive alongside the matrix.
+    pub(crate) fn triplets(&self) -> Vec<(usize, usize, f64)> {
+        let mut out = Vec::with_capacity(self.values.len());
+        for row in 0..self.rows {
+            for k in self.row_ptr[row]..self.row_ptr[row + 1] {
+                out.push((row, self.col_idx[k], self.values[k]));
+            }
+        }
+        out
+    }
+
     /// Extract the main diagonal.
     pub fn diagonal(&self) -> DVector<f64> {
         let n = self.rows.min(self.cols);
@@ -342,6 +356,112 @@ pub fn conjugate_gradient(
     Err(MeshError::ConvergenceFailed {
         iterations: max_iter,
     })
+}
+
+/// A symmetric system with one degree of freedom pinned and eliminated.
+///
+/// The cotangent Laplacian is singular — its kernel is the constants, because only
+/// *differences* of the unknown appear. Pinning a single vertex removes exactly
+/// that one-dimensional kernel. Eliminating it, rather than adding a penalty to
+/// the diagonal, keeps the condition number the mesh's own and leaves the CG
+/// tolerance meaning what it says.
+///
+/// Two callers rely on this, for the same reason:
+///
+/// - **ARAP's global step**, where the matrix is shared by `u`, by `v`, and across
+///   every local/global iteration while only the right-hand side changes.
+/// - **The heat method's Poisson solve**, where `φ` is determined only up to a
+///   constant. Without pinning, CG cannot drive the relative residual below the
+///   null-space contribution and reports `ConvergenceFailed` at any iteration
+///   count — which it did, for every mesh larger than eight vertices.
+///
+/// [`PinnedReduction::reduce_rhs`] folds the pinned column into the right-hand
+/// side, so a non-zero pinned value works as well as zero.
+pub(crate) struct PinnedReduction {
+    /// The Laplacian restricted to free vertices, `L_ff`.
+    pub(crate) matrix: CsrMatrix,
+    /// Global vertex index to reduced index; `None` for the pinned vertex.
+    reduced_index: Vec<Option<usize>>,
+    /// The pinned vertex.
+    pinned: usize,
+    /// Non-zeros of the pinned column over free rows: `(reduced_row, value)`.
+    pinned_column: Vec<(usize, f64)>,
+}
+
+impl PinnedReduction {
+    pub(crate) fn new(triplets: &[(usize, usize, f64)], n_vertices: usize, pinned: usize) -> Self {
+        let mut reduced_index = vec![None; n_vertices];
+        let mut n_free = 0;
+        for (v, slot) in reduced_index.iter_mut().enumerate() {
+            if v != pinned {
+                *slot = Some(n_free);
+                n_free += 1;
+            }
+        }
+
+        // The pinned column can receive several triplets for the same row, so
+        // accumulate before storing.
+        let mut column_acc = vec![0.0; n_free];
+        let mut reduced_triplets = Vec::with_capacity(triplets.len());
+
+        for &(row, col, value) in triplets {
+            let Some(r) = reduced_index[row] else {
+                continue;
+            };
+            match reduced_index[col] {
+                Some(c) => reduced_triplets.push((r, c, value)),
+                None => column_acc[r] += value,
+            }
+        }
+
+        let pinned_column = column_acc
+            .into_iter()
+            .enumerate()
+            .filter(|(_, v)| *v != 0.0)
+            .collect();
+
+        Self {
+            matrix: CsrMatrix::from_triplets(n_free, n_free, reduced_triplets),
+            reduced_index,
+            pinned,
+            pinned_column,
+        }
+    }
+
+    pub(crate) fn n_free(&self) -> usize {
+        self.matrix.nrows()
+    }
+
+    /// The vertex held fixed by this reduction.
+    #[allow(dead_code)]
+    pub(crate) fn pinned(&self) -> usize {
+        self.pinned
+    }
+
+    /// Restrict a full right-hand side to the free rows, moving the pinned
+    /// vertex's known contribution across: `rhs_f − L_fp x_p`.
+    pub(crate) fn reduce_rhs(&self, full: &DVector<f64>, pinned_value: f64) -> DVector<f64> {
+        let mut rhs = DVector::zeros(self.n_free());
+        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
+            if let Some(r) = maybe_r {
+                rhs[*r] = full[v];
+            }
+        }
+        for &(r, l_fp) in &self.pinned_column {
+            rhs[r] -= l_fp * pinned_value;
+        }
+        rhs
+    }
+
+    /// Scatter a reduced solution back over the full vertex range, leaving the
+    /// pinned entry untouched.
+    pub(crate) fn scatter(&self, solution: &DVector<f64>, out: &mut [f64]) {
+        for (v, maybe_r) in self.reduced_index.iter().enumerate() {
+            if let Some(r) = maybe_r {
+                out[v] = solution[*r];
+            }
+        }
+    }
 }
 
 #[cfg(test)]

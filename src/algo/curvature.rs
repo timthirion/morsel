@@ -187,13 +187,19 @@ fn voronoi_area_contribution(
     0.125 * (pr.norm_squared() * cot_q + pq.norm_squared() * cot_r)
 }
 
-/// Compute mixed Voronoi area for a vertex.
+/// Compute the mixed Voronoi area of a vertex — its share of the surface area
+/// under the dual cell the cotangent operator is derived from.
+///
+/// This is the mass that pairs with a cotangent Laplacian. Barycentric lumping
+/// (`area / 3` per incident triangle) is *not* interchangeable with it: the two
+/// disagree wherever the dual cell is not the barycentric one, which is most
+/// places and all boundaries.
 ///
 /// Uses the Meyer et al. formulation:
 /// - Non-obtuse triangles: Voronoi area
 /// - Obtuse at vertex: triangle_area / 2
 /// - Obtuse elsewhere: triangle_area / 4
-fn compute_mixed_area<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, v: VertexId<I>) -> f64 {
+pub fn mixed_voronoi_area<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, v: VertexId<I>) -> f64 {
     let mut area = 0.0;
 
     for f in mesh.vertex_faces(v) {
@@ -367,7 +373,7 @@ fn gaussian_curvature_impl<I: MeshIndex + Sync>(
     let compute_vertex = |idx: usize| -> f64 {
         let v = VertexId::<I>::new(idx);
         let angle_sum = compute_angle_sum(mesh, v);
-        let area = compute_mixed_area(mesh, v);
+        let area = mixed_voronoi_area(mesh, v);
 
         let angle_defect = 2.0 * PI - angle_sum;
 
@@ -426,7 +432,7 @@ fn mean_curvature_impl<I: MeshIndex + Sync>(mesh: &HalfEdgeMesh<I>, parallel: bo
     let compute_vertex = |idx: usize| -> f64 {
         let v = VertexId::<I>::new(idx);
         let laplacian = compute_mean_curvature_normal(mesh, v);
-        let area = compute_mixed_area(mesh, v);
+        let area = mixed_voronoi_area(mesh, v);
 
         if area > 1e-10 {
             let laplacian_normalized = laplacian / area;
@@ -514,7 +520,7 @@ fn compute_curvature_impl<I: MeshIndex + Sync>(
         let v = VertexId::<I>::new(idx);
 
         // Compute area once
-        let area = compute_mixed_area(mesh, v);
+        let area = mixed_voronoi_area(mesh, v);
 
         // Gaussian curvature
         let angle_sum = compute_angle_sum(mesh, v);
@@ -732,7 +738,7 @@ mod tests {
         // With a discrete approximation, we won't get exact values
         let mut total_gaussian = 0.0;
         for v in mesh.vertex_ids() {
-            total_gaussian += result.gaussian(v) * compute_mixed_area(&mesh, v);
+            total_gaussian += result.gaussian(v) * mixed_voronoi_area(&mesh, v);
         }
 
         // Gauss-Bonnet: ∫K dA = 2π * χ = 2π * 2 = 4π for a sphere
@@ -865,7 +871,7 @@ mod tests {
 
         let mut total = 0.0;
         for v in mesh.vertex_ids() {
-            let area = compute_mixed_area(&mesh, v);
+            let area = mixed_voronoi_area(&mesh, v);
             total += gaussian[v.index()] * area;
         }
 
