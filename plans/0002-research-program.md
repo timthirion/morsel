@@ -1,182 +1,221 @@
-# Research program: machine-checked geometry processing
+# Research program: structure-first geometry processing
 
 - **Status:** active
 - **Last updated:** 2026-07-29
-- **Last touched on:** macOS laptop, Claude Code session — program framing written, no research output yet
+- **Last touched on:** macOS laptop, Claude Code session — spine rewritten around
+  algorithm design; first obstruction measured
 
 ## Goal
 
-Build a geometry processing research program around one thesis:
+Produce novel geometric algorithms, using structure preservation as the design
+discipline and a proof assistant as the instrument that makes the discipline
+rigorous.
 
-> **Formalization finds a class of error that testing structurally cannot — a
-> discrete specification that does not satisfy the property it is assumed to
-> have. The corrected mathematics is the research result; the proof assistant is
-> the method.**
+The spine, in order:
 
-The deliverables, in increasing durability:
+1. **Design.** State the structural properties an operator must satisfy, then
+   *derive* the operator. The specification determines the algorithm.
+2. **Impossibility.** When the properties cannot all hold, prove they cannot. A
+   sharp obstruction is a novel result and it redirects everyone downstream.
+3. **Audit.** What falls out along the way — existing discretizations that do not
+   satisfy their assumed properties. Real, publishable, and the honest source of
+   early results, but a by-product rather than the thesis.
 
-1. A library whose invariants are machine-checked rather than merely tested.
-2. A published audit of which discrete differential operators satisfy which
-   structural properties under which mesh hypotheses.
-3. Foundations for discrete differential geometry in Lean 4, ideally upstreamed.
-
-Time horizon is **2–10 years**, deliberately. There is no publication pressure,
-and the program is designed around that rather than in spite of it.
+Time horizon is **2–10 years**, deliberately. There is no publication pressure and
+the program is designed around that.
 
 ## Context
 
-### Why this thesis, and not "we verified a library"
+### Why this spine, and not "we verified a library"
 
-"We verified our geometry library" is not a geometry paper — the geometry
-community values proofs of *mathematics*, not proofs of *code*. But the inverse
-framing works: use formalization to discover that standard practice rests on a
-false premise, then publish the corrected premise.
+An audit is not an algorithm. "These discretizations do not satisfy their stated
+properties" is a critique; SGP reviewers will ask what the method is. A program
+whose output is findings about other people's methods is a support activity
+dressed as a contribution.
 
-There is already one instance, found in July 2026 without any Lean at all. The
-OMT parameterization lumped vertex masses barycentrically (`area / 3` per
-incident triangle) and fed them to a power diagram that partitions the domain
-into *dual cells*. Those disagree — on a flat 4×4 grid a corner vertex is
-assigned mass `0.0833` against a `0.0625` cell — so satisfying the mass
-constraint *required* moving vertices off an already-isometric map. The test
-suite was green throughout. The premise is a two-line proposition in Lean and it
-is false.
+But structure preservation is not only an audit tool — **it is how discrete
+operators get invented.** Discrete exterior calculus falls out of demanding a
+discrete Stokes theorem. The cotangent Laplacian is not a guess; it is the unique
+FEM Laplacian on piecewise-linear functions. Intrinsic Delaunay flipping is
+motivated by demanding positive weights. In each case the properties came first
+and the operator was derived.
 
-That is the shape of the result. The program is a machine for producing more of
-them.
+We did a miniature version in July 2026 without noticing. The OMT mass-lumping
+fix was not "barycentric is wrong, try something else." It was: *what lumping is
+consistent with a dual-cell partition?* — and mixed Voronoi is **forced**. The
+specification determined the algorithm. That is the move to scale up.
 
-### Why the space is rich
+### The shape a formal instrument is best at: impossibility
 
-Discretizations whose stated properties are conditional, under-specified, or
-simply wrong are common in this field. Candidates to audit:
+The template exists and is well known: Wardetzky, Mathur, Kälberer & Grinspun,
+*Discrete Laplace Operators: No Free Lunch* (SGP 2007) — no discrete Laplacian on
+general meshes is simultaneously symmetric, local, linearly precise, and
+positive-weighted. That is a structure-preservation impossibility, it is highly
+cited, and it reframed what everyone after it attempted.
 
-- **Cotangent Laplacian.** Loses the maximum principle on obtuse triangles;
-  weights go negative. The intrinsic-Delaunay line of work exists because of it.
-- **Mass lumping.** Barycentric vs. Voronoi vs. mixed Voronoi are not
-  interchangeable, and the choice is often made without stating what it must
-  satisfy. Already bitten us once.
-- **Discrete mean curvature.** Several inequivalent definitions; not all converge.
-- **Angle-defect Gaussian curvature.** Converges, but in a weaker sense than
-  usually assumed.
-- **Vertex normals.** Area-weighted, angle-weighted, and uniform have different
-  convergence behaviour.
-- **Non-manifold Laplacians.** Sharp & Crane (SGP 2020) exists precisely because
-  the naive construction is wrong.
+A proof assistant is the right instrument for such results because the value is
+in the *generality* of the "no" — not in the two or three special cases one can
+check by hand.
 
-Each is a formalizable claim with hypotheses that may or may not hold.
+### First obstruction, already measured
 
-### Why formalization fits this program's constraints
+Not conjecture. On a paraboloid patch with the transport driven to convergence
+(worst per-cell area error `9.7e-10`; 20,000 iterations change nothing past 783):
 
-The author is an engineering manager; available time is consistent but
-fragmented. Verification decomposes better than almost any other research
-activity: **a proof obligation is a self-contained evening.** You close one lemma
-and stop, holding no state. Contrast debugging a numerical solver, which needs
-long contiguous focus. This is a structural fit, not only a preference.
+| | LSCM | OMT, converged |
+|---|---|---|
+| n=8, interior faces | [0.730, 1.178] | **[0.968, 1.053]** |
+| n=16, interior faces | [0.725, 1.395] | **[0.970, 1.033]** |
+
+Cell areas are matched to nine digits, and **per-triangle** area distortion still
+plateaus at ±3–5%. More iterations do not touch it. The reason is a counting
+argument, not a numerical one.
+
+For a triangulated disk, Euler's formula with `3F = 2E − B` gives
+
+```
+F = 2V − B − 2
+```
+
+The semi-discrete transport has `V − 1` weight degrees of freedom (one lost to
+the dual's invariance under a constant shift), while per-triangle area
+preservation asks for `F` equalities. Substituting gives the deficit *exactly*:
+
+```
+F − (V − 1) = V − B − 1 = (interior vertices) − 1
+```
+
+**So exact dual-cell area preservation cannot imply per-triangle area
+preservation, for any mesh with two or more interior vertices** — and the gap
+grows linearly with refinement. That is provable by counting, it explains the
+measured plateau, and it constrains a whole family of vertex-weighted transport
+methods rather than one implementation.
+
+The sharp form came from writing the test: an initial "roughly twice as many
+faces as vertices" reading failed on a single-quad mesh, where every vertex is on
+the boundary and there is no deficit at all. The exact statement is better than
+the asymptotic one, and it is now pinned down in
+`tests/omt_dof_deficit.rs`.
+
+A caution recorded deliberately: an earlier reading of the same data claimed a
+*boundary* obstruction, because the maximum area ratio stayed bit-identical to
+LSCM at every iteration count. That has a trivial explanation — with
+`fix_boundary = true`, a triangle whose three vertices are all boundary vertices
+is frozen, and grid corners are exactly that. The lesson is that an arresting
+invariance deserves the boring explanation first.
 
 ### Where we start from
 
-- **morsel** — half-edge core with machine-independent invariant tests, exact IO,
-  a repaired parameterization stack (LSCM/ARAP/OMT), geodesics (heat method and
-  Dijkstra), curvature, remeshing, decimation, subdivision, a wgpu viewer, CI.
+- **morsel** — half-edge core with machine-checked invariants, exact IO, a
+  repaired parameterization stack (LSCM/ARAP/OMT with exact power cells),
+  geodesics (heat method, Dijkstra), curvature, remeshing, decimation,
+  subdivision, a wgpu viewer, CI.
 - **approxum** — floating-point polygon/curve/sampling/distance geometry; backs
-  OMT's exact power cells.
-- **Praxis** (`~/src/lean`) — a Lean 4 + Mathlib practice ground with a
-  `prove-goal` skill, a `lean-prover` agent, and an automation-closed /
-  agent-closed / open benchmark.
-- **A blog** (`timthirion.github.io`) — the exposition channel, with a
-  half-finished piece on envelope geometry.
+  OMT's exact cells.
+- **Praxis** (`~/src/lean`) — Lean 4 + Mathlib with a `prove-goal` skill, a
+  `lean-prover` agent, and an automation-closed / agent-closed / open benchmark.
+- **A blog** — the exposition channel.
 
-Two halves of this program already exist and have never been connected. That
-connection is the play.
+Both halves of this program already exist and have never been connected. Most
+attempts would have to build one from scratch; over a decade that head start is
+worth more than any single technical choice below.
 
-Nothing in any repository is novel research yet. That is a fine foundation and
-should not be mistaken for progress toward a result.
+Nothing in any repository is novel research yet. Fine foundation; not progress.
+
+### Why this suits the constraints
+
+The author is an engineering manager: time is consistent but fragmented.
+Structure-first design decomposes well — a property to state, an operator to
+derive, an obligation to close — and a proof obligation in particular is a
+self-contained evening that holds no state between sessions.
 
 ## Design
 
-### The structure-preservation audit
+### The algorithm track (the spine)
 
-The concrete decade-scale target. Discrete differential geometry's value
-proposition is that good discretizations *preserve structure*. Each such property
-is formalizable:
+All four live in semi-discrete transport, where the infrastructure is already
+ahead of what is published.
 
-| property | statement |
-|---|---|
-| exactness | `d ∘ d = 0` |
-| symmetry | `L = Lᵀ` |
-| semidefiniteness | `xᵀ L x ≥ 0` |
-| kernel | `ker L = constants` |
-| maximum principle | no interior extrema for harmonic functions |
-| partition of unity | `Σᵢ φᵢ = 1` |
-| mass consistency | `Σᵢ mᵢ = total area` |
-| convergence | operator → smooth counterpart under refinement |
+1. **Per-face transport, or a characterised compromise.** The direct response to
+   the obstruction above. If per-triangle area preservation needs per-triangle
+   degrees of freedom, then either move to a formulation that has them, or accept
+   a least-squares compromise and *characterise the residual* — a bound in terms
+   of `F/V`, mesh quality, and the conformal factor. Either outcome is a result;
+   the second is probably the more useful one.
+2. **Boundary-sliding transport.** Boundary vertices constrained to move *along*
+   the boundary curve — a 1D transport problem coupled to the 2D interior.
+   Currently the code offers only pinned (freezes a boundary layer) or free
+   (contracts the boundary inward and buys nothing). Neither is right and, as far
+   as we know, the constrained version is not well solved in the literature.
+3. **Exact-Hessian damped Newton.** The dual's Hessian has a closed form in shared
+   power-cell edge lengths. Cells are now exact polygons, so those lengths are
+   *available exactly* where everyone else estimates them. Replaces an ascent that
+   currently needs iterations growing linearly in vertex count.
+4. **Area preservation with guaranteed local injectivity.** Transport plus a
+   no-flip constraint, with the guarantee proved rather than observed.
 
-Cross those against operators (cotangent Laplacian, mass matrices, discrete
-curvatures, normals, the conformal energy) and against mesh hypotheses
-(manifold, Delaunay, non-obtuse, boundary or not). Each cell of the resulting
-table is a theorem or a counterexample. **The table is the research artifact**,
-and it is buildable one lemma at a time.
+Each is stated as a property set first, so that the derivation — not a guess — is
+what produces the method.
 
-### Priority: mathematics first, extraction second
+### Verification's role
 
-This inverts the emphasis in [`0001`](0001-formal-verification-in-lean.md).
+**Serving the algorithm track, in three ways:**
 
-Rust→Lean extraction via Charon/Aeneas can never reach the numerical code —
-Lean's `Float` is opaque and not encoded in its logic — so extraction only ever
-buys confidence in the *combinatorial* layer. That is genuinely valuable for the
-library and worth doing opportunistically, but it is not a research result.
+- *Deriving.* Formalise the property set, then show the operator satisfying it is
+  unique (or that the family is exactly characterised). This is where "the
+  specification determined the algorithm" becomes a theorem rather than a story.
+- *Obstruction.* Prove the impossibilities. The counting argument above is the
+  first candidate and needs only Euler's formula plus linear algebra — well within
+  what Mathlib supports today.
+- *Confidence.* Machine-checked combinatorial invariants, so the library the
+  experiments run on is trustworthy. Genuinely useful, not a research output.
 
-The specifications over ℝ are where the contributions are. Lead with those.
+Priority within [`0001`](0001-formal-verification-in-lean.md) is unchanged from
+its revision: mathematics first, Rust extraction opportunistic. Extraction can
+never reach the numerical code, since Lean's `Float` is opaque.
 
 ### The proof-obligation queue
 
-The process mechanism, and it suits fragmented time. Every time the codebase
-asserts "this holds because…", the claim is logged as an obligation. This is
-already happening organically:
+Every "this holds because…" in the codebase becomes a logged obligation. Already
+accumulated:
 
-- `Σ ℓᵢ² cot θᵢ = 4 · area` — asserted in an `omt.rs` comment, relied upon to
-  guarantee lumped masses sum to surface area.
-- Mixed Voronoi areas partition a triangle (both the non-obtuse and obtuse cases).
-- Barycentric thirds ≠ dual cell areas — the counterexample above.
-- Cotangent Laplacian's kernel is the constants — why ARAP pins exactly one vertex.
-- LSCM's conformal energy has the 4-dimensional similarity group as its kernel —
-  why LSCM pins exactly two, and why DOF elimination is well-posed.
-- `compute_area_distortion` is invariant to uniform UV scaling — claimed in its
-  docstring.
-- The Kantorovich dual is concave in the weights — why ascent converges.
+- `Σ ℓᵢ² cot θᵢ = 4 · area` — relied on so lumped masses sum to surface area.
+- Mixed Voronoi areas partition a triangle (non-obtuse and obtuse branches).
+- Barycentric thirds ≠ dual cell areas — the counterexample.
+- **`F = 2V − B − 2` for a triangulated disk, and the resulting DOF deficit.**
+- Cotangent Laplacian's kernel is the constants — why ARAP pins one vertex.
+- LSCM's conformal energy has the 4-dimensional similarity kernel — why LSCM pins
+  two, and why DOF elimination is well-posed.
+- `compute_area_distortion` is invariant to uniform UV scaling.
+- The Kantorovich dual is concave in the weights.
 
-**The queue is the research pipeline.** Each item is one evening. Praxis's
-benchmark (automation-closed / agent-closed / open) measures progress through it,
-which also makes the toolkit's improvement a number.
+Each is one evening. Praxis's benchmark measures progress through the queue,
+which also makes toolkit improvement a number.
 
 ### Keeping the ratio honest
 
-Verification only finds bugs if there is real code doing real work. Target
-roughly **2:1 implementation to verification** in the early years. If a quarter
-passes with no new geometry implemented, the program has drifted.
+Design and implementation lead; verification follows. Target roughly **2:1
+implementation to verification** in the early years. If a quarter passes with no
+new geometry implemented, the program has drifted into hygiene.
 
 ### Venues
 
-Expect **two papers to two communities**, not one paper that satisfies both:
+- **SGP / CGF** — the method papers, and the obstruction results. This is the
+  target, and the spine above is what makes it a method submission with unusually
+  strong guarantees rather than a verification paper hoping to interest geometers.
+- **ITP / CPP / CICM** — the formalisation itself, once there is a library worth
+  describing.
+- **SoCG** — a possible home for an exact-arithmetic robustness strand.
 
-- **Formalization paper** — ITP / CPP / CICM. "Foundations of discrete
-  differential geometry in Lean 4." Establishes the library.
-- **Geometry paper** — SGP, or CGF for something longer. "Discrete operators that
-  do not satisfy their assumed properties, and what to use instead." Reports what
-  the library found.
-- **SoCG** is a third possibility for the exact-arithmetic and robustness strand,
-  which has a tradition there.
-
-A Mathlib contribution of DDG foundations may outlast both. Worth auditing what
-Mathlib actually has first: smooth manifolds are well developed; as far as we
-know there is no discrete exterior calculus and no treatment of piecewise-linear
-surfaces as metric objects. **Confirm before assuming.**
+A Mathlib contribution of discrete-geometry foundations may outlast all of them.
+**Audit what Mathlib actually has before assuming it has nothing**: smooth
+manifolds are well developed; the discrete side is believed absent but unverified.
 
 ### The C++ comparison problem
 
-To publish a *geometry* result, reviewers will require comparison against
-libigl / geometry-central / CGAL. That means the measurement harness eventually
-needs to invoke C++ baselines and compare numerically. Much easier to design in
-than to retrofit — see phase M0.
+Reviewers will require comparison against libigl / geometry-central / CGAL. The
+measurement harness needs to be able to invoke a foreign implementation and
+compare numerically. Cheap to design in now, painful to retrofit.
 
 ## Steps
 
@@ -184,90 +223,94 @@ than to retrofit — see phase M0.
 
 - [x] CI: tests, clippy `-D warnings` per feature set, format gate.
 - [x] Half-edge invariants as universal properties over a fixture set.
-- [x] Exact IO round trips (found and fixed `f32` narrowing in OBJ *and* PLY).
-- [ ] Measurement harness for algorithms other than parameterization: Hausdorff
-      and Frechet (approxum has these), triangle-quality histograms, volume and
-      area preservation. Every claim gets a number.
-- [ ] A benchmark corpus that deliberately includes degenerate input — obtuse
-      triangles, near-degenerate slivers, cocircular lattices, non-manifold
-      edges, unreferenced vertices, inconsistent winding.
-- [ ] Close the gaps that make the library untestable on real input: mesh
-      `repair`, and a seam/cut generator. Right now
+- [x] Exact IO round trips (found `f32` narrowing in OBJ *and* PLY).
+- [x] Measure whether the OMT residual is an obstruction or unconvergence — it is
+      an obstruction; the transport converges to `1e-9` on cell areas while
+      per-triangle distortion plateaus at ±3–5%.
+- [ ] Measurement harness beyond parameterization: Hausdorff / Frechet
+      (approxum has them), triangle-quality histograms, volume and area
+      preservation. Designed so a C++ baseline drops in as another implementation.
+- [ ] A degenerate-input corpus: obtuse triangles, slivers, cocircular lattices,
+      non-manifold edges, unreferenced vertices, inconsistent winding.
+- [ ] Mesh `repair` and a seam/cut generator — without them
       `morsel parameterize examples/stanford-bunny.obj -m omt` fails, because
-      every bundled example is closed and LSCM/ARAP/OMT all require boundary.
-- [ ] Expose `geodesic` and the CVT/anisotropic remeshers in the CLI — roughly
-      3,400 lines of working library code is currently unreachable.
-- [ ] Design the harness so a C++ baseline can be dropped in as another
-      implementation to compare against.
+      every bundled example is closed and LSCM/ARAP/OMT all need boundary.
+- [ ] Expose `geodesic` and the CVT/anisotropic remeshers in the CLI (~3,400
+      lines of working code currently unreachable).
 
-### M1 — one exact reproduction (≈ 6–12 months)
+### M1 — the first algorithmic result (≈ 6–18 months)
 
-- [ ] Reproduce a published result and match its numbers. **The obvious
-      candidate is already in the repo**: `algo/geodesic/heat.rs` is 596 lines
-      implementing the heat method (Crane, Weischedel, Wardetzky) and has never
-      been validated against the paper's error curves. Free signal on platform
-      quality, and it is not even exposed in the CLI.
-- [ ] Write it up on the blog. Exposition is roughly half of what makes this kind
-      of program legible, and the muscle needs exercising.
+- [ ] Literature check: has the DOF-deficit obstruction for vertex-weighted
+      transport been stated? Has boundary-constrained semi-discrete transport been
+      solved? **Do this before building anything.**
+- [ ] Formalise `F = 2V − B − 2` and `deficit = V_interior − 1` in Lean. Small,
+      self-contained, needs only Euler's formula and arithmetic, and it converts a
+      measurement into a theorem. Executable form already in
+      `tests/omt_dof_deficit.rs`.
+- [ ] Derive and implement whichever of per-face transport or the characterised
+      least-squares residual the counting argument actually licenses.
+- [ ] Exact-Hessian Newton, so experiments stop being iteration-bound.
+- [ ] Validate the heat method (`algo/geodesic/heat.rs`, 596 lines, never checked
+      against the paper's error curves) — free calibration of what "matching
+      published numbers" feels like, and it is not exposed in the CLI either.
+- [ ] Write it up on the blog. Exposition is half of what makes a program legible.
 
-### M2 — the formal foundation begins (runs concurrently from M1)
+### M2 — the formal foundation (concurrent from M1)
 
-- [ ] Stand up `morsel-verif` as a Lake project on Praxis's toolchain.
-- [ ] Audit what Mathlib already provides for triangulated surfaces.
-- [ ] Close the first four obligations from the queue, starting with the
-      barycentric counterexample (explicit rationals, `decide`/`norm_num`, no
-      geometry library needed).
-- [ ] Pair every landed theorem with a `proptest` in morsel asserting the same
-      property numerically, with a named tolerance.
+- [ ] `morsel-verif` as a Lake project on Praxis's toolchain.
+- [ ] Audit Mathlib's discrete-geometry coverage.
+- [ ] Close the queue, starting with the barycentric counterexample (explicit
+      rationals, `decide`/`norm_num`, no geometry library needed).
+- [ ] Pair every landed theorem with a `proptest` asserting the same property
+      numerically, with a named tolerance.
 
-### M3 — the audit (≈ 2–4 years)
+### M3 — obstruction results (≈ 2–5 years)
 
-- [ ] Formalize the structure-preservation properties as reusable Lean
-      definitions.
-- [ ] Fill the operator × property × hypothesis table. Record counterexamples as
-      first-class results, not failures.
-- [ ] Publish the formalization side (ITP/CPP), and upstream what Mathlib will take.
+- [ ] Formalise the structure-preservation properties as reusable definitions:
+      exactness, symmetry, semidefiniteness, kernel, maximum principle, partition
+      of unity, mass consistency, convergence.
+- [ ] Establish which sets are mutually satisfiable, for transport maps and then
+      more broadly. The no-free-lunch template, done for area-preserving maps.
+- [ ] Publish the formalisation side; upstream what Mathlib will take.
 
-### M4 — the geometry result (≈ 4–10 years)
+### M4 — the SGP submission (≈ 4–10 years)
 
-- [ ] Assemble the counterexamples into a geometry contribution: which standard
-      discretizations fail which stated property, under what conditions, and what
-      the corrected construction is.
-- [ ] Full C++ baseline comparison.
-- [ ] Submit to SGP with code release; pursue the Graphics Replicability Stamp,
-      where a solo program can win outright.
+- [ ] A method paper: the derived algorithm, its guarantee, the obstruction that
+      motivates it, full C++ baseline comparison.
+- [ ] Code release; pursue the Graphics Replicability Stamp, where a solo program
+      can win outright.
 
 ## Open questions
 
-- **What does Mathlib actually have?** The plan assumes no discrete exterior
-  calculus and no PL surfaces. Verify before building; if a partial foundation
-  exists, extend rather than duplicate.
-- **Is the audit framing publishable as geometry, or does it read as criticism?**
-  A paper that says "these standard methods are subtly wrong" needs to land as
-  constructive. Mitigation: always pair a counterexample with a corrected
-  construction and a measurement showing the correction matters.
-- **How much does exact arithmetic belong in the story?** `exactum` was dropped
-  from morsel as unused. A robustness strand (exact predicates for degenerate
-  power diagrams — we hit exactly this in July 2026 when cocircular lattice sites
-  degenerated a polygon clipper) could be a third lane, or a distraction.
-- **Which single operator is the best first audit target?** The cotangent
-  Laplacian is the most consequential and the most studied, so it is both the
-  highest-value and the hardest place to say something new. Mass lumping is
-  narrower and we already have a result there.
+- **Is the DOF-deficit obstruction already known?** It is elementary enough that
+  it may be folklore. If so, the result is the *consequence* — a sharp bound on
+  achievable per-triangle distortion in terms of `V_interior`, mesh quality and
+  the conformal factor — rather than the counting itself. The measured plateau
+  narrows with refinement (±5% at 81 vertices, ±3% at 289), which suggests such a
+  bound exists and is worth deriving.
+- **Per-face transport: does it even make sense?** Faces do not carry a natural
+  dual cell. Possibly the right move is not per-face transport but accepting the
+  deficit and characterising the residual sharply.
+- **What does Mathlib have?** Verify before building.
+- **Does exact arithmetic deserve a lane?** `exactum` was dropped from morsel as
+  unused, but degenerate power diagrams broke a polygon clipper in July 2026, so
+  the need is demonstrated. Third lane or distraction — undecided.
+- **How does the audit strand get framed constructively?** Always pair a
+  counterexample with a corrected construction *and* a measurement showing the
+  correction matters.
 
 ## Done when
 
-Staged, because a decade-scale program has no single finish line.
-
-- **M0 done:** every algorithm in morsel has a quality metric, a degenerate-input
-  corpus exists, and no capability is unreachable from the CLI.
-- **M1 done:** one published result reproduced with numbers that match, written up.
-- **M2 done:** `lake build` green with no `sorry`, at least four queue obligations
-  closed, each paired with a numerical test in morsel.
-- **M3 done:** the operator × property table has enough filled cells to be worth
-  a paper, and the formalization is submitted somewhere.
-- **M4 done:** an SGP submission, code released, replicability stamp pursued.
+- **M0:** every algorithm has a quality metric, a degenerate corpus exists, no
+  capability is unreachable from the CLI, and the harness can call a C++ baseline.
+- **M1:** one derived algorithm with a stated guarantee, plus the obstruction
+  formalised, written up publicly.
+- **M2:** `lake build` green with no `sorry`, the queue's first four closed, each
+  paired with a numerical test.
+- **M3:** enough mutually-satisfiable/unsatisfiable property sets established to
+  be worth a paper; formalisation submitted.
+- **M4:** SGP submission, code released, replicability stamp pursued.
 
 Non-goals, restated so they cannot creep: no f64 semantics in Lean, no claim that
-morsel's numerical kernels are verified, and no infrastructure work without a
-named experiment behind it.
+the numerical kernels are verified, no infrastructure without a named experiment
+behind it, and no verification work that is not serving the algorithm track.
