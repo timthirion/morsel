@@ -137,6 +137,16 @@ fn algorithms() -> Vec<Probe> {
                 check_mesh(&m)
             })
         }),
+        ("subdivide:cc", |m| {
+            run(|| {
+                let mut m = m.clone();
+                // A quad scheme; it should decline a triangle mesh rather than
+                // index past the end of its per-face data, which is what it used
+                // to do.
+                subdivide::catmull_clark_subdivide(&mut m, &subdivide::SubdivideOptions::new(1));
+                check_mesh(&m)
+            })
+        }),
         ("subdivide:loop", |m| {
             run(|| {
                 let mut m = m.clone();

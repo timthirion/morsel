@@ -580,6 +580,14 @@ fn cmd_subdivide(
             subdivide::loop_subdivide_with_progress(&mut mesh, &options, &progress);
         }
         SubdivideMethod::CatmullClark => {
+            // A quad scheme. Say so rather than silently returning the input.
+            if !mesh.is_quad_mesh() {
+                return Err(
+                    "Catmull-Clark requires a quad mesh; this one is not made of quads. \
+                     Use `--method loop` for triangle meshes."
+                        .into(),
+                );
+            }
             println!(
                 "Applying Catmull-Clark subdivision ({} iterations, {})...",
                 iterations, mode

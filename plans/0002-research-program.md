@@ -273,6 +273,17 @@ compare numerically. Cheap to design in now, painful to retrofit.
 - [x] Measure whether the OMT residual is an obstruction or unconvergence — it is
       an obstruction; the transport converges to `1e-9` on cell areas while
       per-triangle distortion plateaus at ±3–5%.
+- [x] Validate smoothing and subdivision against checkable properties. Two claims
+      the code makes about itself both hold: `taubin_smooth` really is
+      shrinkage-resistant (+1.8% volume on a sphere where Laplacian loses 79%), and
+      mean curvature flow really follows the analytic law, with `R²` falling
+      linearly in `t` at slope `2.00` — i.e. it flows by the *mean* curvature
+      `1/R`, where the literature's `H = κ₁+κ₂` convention would give `4`. Loop
+      subdivision preserves the Euler characteristic, quadruples faces exactly, and
+      converges. Two defects found: **Catmull-Clark panicked on a triangle mesh**
+      (invalid-index sentinel again; now declines, and the CLI reports it), and
+      **`examples/sphere.obj` was wound inward** — the only such asset, which had
+      been silently flipping the sign of everything normal-dependent.
 - [ ] Measurement harness beyond parameterization: Hausdorff / Frechet
       (approxum has them), triangle-quality histograms, volume and area
       preservation. Designed so a C++ baseline drops in as another implementation.

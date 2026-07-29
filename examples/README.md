@@ -26,14 +26,19 @@ having. `tests/curvature_analytic.rs` asserts against every number here.
 | mesh | Gaussian K | mean \|H\| | area |
 |------|-----------|-----------|------|
 | `sphere.obj` (r = 0.5) | 4 | 2 | 3.1416 |
+| `torus.obj` mean \|H\| | — | 1.334 | — |
 | `spherical-cap.obj` (unit sphere, cut at r = 0.8) | 1 | 1 | 2.5133 |
 | `cylinder.obj` (r = 1, h = 2) | **0 exactly** | 0.5 | 12.5664 |
 | `torus.obj` (R = 1, r = 0.35) | −4.3956 … +2.1164 | — | 13.8174 |
 
 Two conventions, established by measurement rather than assumption: the curvature
 functions return **pointwise** values rather than integrated angle defects, so
-summing them raw is meaningless; and mean curvature comes back **negative** where
-the outward-normal convention gives positive, consistently, so compare magnitudes.
+summing them raw is meaningless; and mean curvature comes back **negative** on every
+outward-wound mesh here, so compare magnitudes.
+
+All five closed or open surfaces are now wound outward, verified by face normal
+against the expected outward direction, and the three closed ones by positive
+signed volume.
 
 ## What each is for
 
@@ -50,6 +55,10 @@ edges are the quad diagonals and collapsing those deletes whole patches.
 
 **`sphere.obj`** — closed and boundary-free at a useful size. Good for curvature,
 smoothing, decimation, and anything wanting a closed input bigger than 12 faces.
+Its winding was reversed in July 2026: it had been inward-facing, signed volume
+`−0.50` where every other asset here is positive, which silently flipped the sign
+of anything normal-dependent and made it look as though mean curvature disagreed
+between meshes.
 
 **`spherical-cap.obj`** — the parameterization input, and the only disk here. LSCM,
 ARAP and OMT all require exactly one boundary loop, and nothing else in this set

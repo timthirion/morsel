@@ -30,6 +30,15 @@ use super::SubdivideOptions;
 ///
 /// # Vertex Rules
 ///
+/// # Requires a quad mesh
+///
+/// This is a quadrilateral scheme. Given anything else — a triangle mesh, say —
+/// it leaves the mesh unchanged rather than subdividing it, because the signature
+/// gives it no way to report the refusal. Check [`HalfEdgeMesh::is_quad_mesh`]
+/// first if that distinction matters; use [`super::loop_subdivide`] for triangles.
+///
+/// # Vertex Rules
+///
 /// - **Face point**: centroid of face vertices
 /// - **Edge point**: average of (edge midpoint, adjacent face points)
 /// - **Vertex point**: (Q + 2R + (n-3)S) / n where:
@@ -45,6 +54,15 @@ pub fn catmull_clark_subdivide<I: MeshIndex>(
         return;
     }
 
+    // Catmull-Clark is a quad scheme, and the implementation below indexes
+    // per-face data assuming four corners. Handed a triangle mesh it read past the
+    // end and panicked with the invalid-index sentinel. There is no error channel
+    // here, so leave the caller's mesh untouched instead; the CLI checks up front
+    // and reports it properly.
+    if !mesh.is_quad_mesh() {
+        return;
+    }
+
     for _ in 0..options.iterations {
         catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
     }
@@ -56,6 +74,10 @@ pub fn catmull_clark_subdivide_with_progress<I: MeshIndex>(
     options: &SubdivideOptions,
     progress: &Progress,
 ) {
+    if !mesh.is_quad_mesh() {
+        return;
+    }
+
     if options.iterations == 0 {
         return;
     }

@@ -10,9 +10,13 @@
 //! - `gaussian_curvature` and `mean_curvature` return **pointwise** curvature, not
 //!   an integrated angle defect. Summing the raw values is meaningless; a
 //!   Gauss-Bonnet check would need to weight each by its dual area.
-//! - Mean curvature comes back **negative** where the outward-normal convention
-//!   would give positive. The sign is consistent across meshes, so it is a
-//!   convention rather than a defect, and these tests compare magnitudes.
+//! - Mean curvature comes back **negative** on every outward-wound mesh — sphere
+//!   `−2.006`, cap `−1.002`, cylinder `−0.500`, torus `−1.334`. That is a sign
+//!   convention, not a defect, and these tests compare magnitudes. Worth noting how
+//!   it was established: `sphere.obj` originally reported `+2.006`, apparently
+//!   contradicting the others, and the reason turned out to be that the asset was
+//!   wound *inward* (signed volume `−0.50`). Reversing it made the convention
+//!   uniform.
 //!
 //! Boundary vertices are excluded throughout: the angle-defect estimator assumes a
 //! full ring, and a boundary vertex does not have one.
