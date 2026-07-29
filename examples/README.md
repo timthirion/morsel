@@ -73,6 +73,25 @@ check that thresholds are scale-relative rather than absolute. Being non-disk, i
 is refused by the parameterizers until a cut generator exists. Ships with
 `stanford-bunny.mtl`.
 
+## `gen_bunny_uvs.rs`
+
+Not an asset — it is the provenance for `stanford-bunny.obj`'s UV coordinates, kept
+so that file is reproducible rather than mysterious. Cargo picks up `.rs` files
+here as examples, so:
+
+```sh
+cargo run --example gen_bunny_uvs             # verify the committed UVs still match
+cargo run --example gen_bunny_uvs -- --write  # regenerate them
+```
+
+Verifying is the default, because the script writes over its own input and a bare
+run therefore used to mutate a committed data file as a side effect of being
+invoked. It is idempotent today — a `--write` reproduces the committed bytes
+exactly — but the default run now checks that rather than assuming it.
+
+It uses cylindrical projection rather than LSCM or ARAP because the bunny has four
+boundary loops and is not a disk, so those methods correctly refuse it.
+
 ## Gaps
 
 No genus-2 asset, and nothing large enough to be a performance case — a benchmark
