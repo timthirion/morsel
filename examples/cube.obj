@@ -1,5 +1,16 @@
 # Cube with UV coordinates for texturing
 # Each face has its own UV mapping showing the full texture
+#
+# NOTE: the corners are deliberately split -- 24 vertices rather than 8 -- because
+# giving every face the whole texture requires per-face UVs, which shared corners
+# cannot express. The consequence is that this is NOT a closed cube: it is six
+# disconnected unit squares (V - E + F = 24 - 30 + 12 = 6, six components, all 24
+# vertices on a boundary, six boundary loops).
+#
+# So it is the right mesh for texturing and UV work, and the wrong one for anything
+# topological. Decimation, for instance, correctly refuses it: its only interior
+# edges are the quad diagonals, and collapsing those deletes whole patches. Use
+# cube-closed.obj when you want an actual closed cube.
 mtllib cube.mtl
 
 # Front face vertices (z = 0.5)
