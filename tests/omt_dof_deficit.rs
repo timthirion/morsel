@@ -21,9 +21,16 @@
 //! F − (V − 1) = V − B − 1 = (interior vertices) − 1
 //! ```
 //!
-//! So the system is overdetermined as soon as a mesh has two interior vertices,
-//! and increasingly so with refinement. Exact dual-cell area preservation
-//! therefore *cannot* imply per-triangle area preservation.
+//! So *this formulation* is overdetermined as soon as a mesh has two interior
+//! vertices, and increasingly so with refinement. Exact dual-cell area
+//! preservation therefore cannot imply per-triangle area preservation.
+//!
+//! Note the qualifier. This is a limit on the power-diagram search space, **not**
+//! on piecewise-linear maps. With full vertex freedom there are `2V − 4` effective
+//! degrees against `F − 1 = 2V − B − 3` constraints — a *surplus* of `B − 1` — and
+//! the stretch-energy / authalic-energy literature attains exact per-triangle area
+//! preservation that way. See `plans/0002-research-program.md` for the literature
+//! check that established this.
 //!
 //! These tests pin down both halves: the counting identity, and the resulting
 //! plateau. If someone later drives per-triangle distortion to zero with a

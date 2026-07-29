@@ -57,52 +57,73 @@ A proof assistant is the right instrument for such results because the value is
 in the *generality* of the "no" — not in the two or three special cases one can
 check by hand.
 
-### First obstruction, already measured
+### First obstruction, measured — and then largely dissolved by the literature
 
-Not conjecture. On a paraboloid patch with the transport driven to convergence
-(worst per-cell area error `9.7e-10`; 20,000 iterations change nothing past 783):
+The measurement stands. On a paraboloid patch with the transport driven to
+convergence (worst per-cell area error `9.7e-10`; 20,000 iterations change nothing
+past 783):
 
 | | LSCM | OMT, converged |
 |---|---|---|
 | n=8, interior faces | [0.730, 1.178] | **[0.968, 1.053]** |
 | n=16, interior faces | [0.725, 1.395] | **[0.970, 1.033]** |
 
-Cell areas are matched to nine digits, and **per-triangle** area distortion still
-plateaus at ±3–5%. More iterations do not touch it. The reason is a counting
-argument, not a numerical one.
-
-For a triangulated disk, Euler's formula with `3F = 2E − B` gives
-
-```
-F = 2V − B − 2
-```
-
-The semi-discrete transport has `V − 1` weight degrees of freedom (one lost to
-the dual's invariance under a constant shift), while per-triangle area
-preservation asks for `F` equalities. Substituting gives the deficit *exactly*:
+Cell areas are matched to nine digits while **per-triangle** area distortion
+plateaus at ±3–5%, and more iterations do not touch it. For a triangulated disk
+Euler's formula with `3F = 2E − B` gives `F = 2V − B − 2`, so against the `V − 1`
+weight degrees of freedom (one lost to the dual's shift invariance) the deficit is
+exactly
 
 ```
 F − (V − 1) = V − B − 1 = (interior vertices) − 1
 ```
 
-**So exact dual-cell area preservation cannot imply per-triangle area
-preservation, for any mesh with two or more interior vertices** — and the gap
-grows linearly with refinement. That is provable by counting, it explains the
-measured plateau, and it constrains a whole family of vertex-weighted transport
-methods rather than one implementation.
-
-The sharp form came from writing the test: an initial "roughly twice as many
-faces as vertices" reading failed on a single-quad mesh, where every vertex is on
-the boundary and there is no deficit at all. The exact statement is better than
-the asymptotic one, and it is now pinned down in
+So *this* formulation cannot achieve exact per-triangle area preservation once a
+mesh has two or more interior vertices. That much is real and is pinned down in
 `tests/omt_dof_deficit.rs`.
 
-A caution recorded deliberately: an earlier reading of the same data claimed a
-*boundary* obstruction, because the maximum area ratio stayed bit-identical to
-LSCM at every iteration count. That has a trivial explanation — with
-`fix_boundary = true`, a triangle whose three vertices are all boundary vertices
-is frozen, and grid corners are exactly that. The lesson is that an arresting
-invariance deserves the boring explanation first.
+**What the literature check (2026-07-29) found, and why it matters more:**
+
+1. **Per-triangle is the standard definition.** A simplicial map is *authalic* iff
+   each triangle's area is proportional to its image area by a common constant. So
+   per-triangle was the right target to measure against.
+2. **Exact per-triangle area preservation is achievable.** The stretch-energy and
+   authalic-energy line (Yueh; Liu & Yueh) optimises over **vertex positions**, and
+   there are necessary-and-sufficient conditions for a minimiser to be
+   area-preserving — authalic energy is zero exactly when the map is authalic. The
+   counting agrees: full vertex freedom gives `2V − 4` effective degrees against
+   `F − 1 = 2V − B − 3` constraints, a *surplus* of `B − 1`. Area-preserving PL maps
+   form a `(B−1)`-dimensional family; they are not rare.
+3. **So the DOF deficit is not an obstruction to the problem — only to the
+   power-diagram search space.** The earlier framing ("cannot imply per-triangle
+   area preservation") overreached by dropping the qualifier that matters.
+4. **The gap is already documented.** OMT is one of about five known families —
+   locally authalic maps, Lie advection, OMT, density-equalizing maps, stretch
+   energy minimisation — and SEM is described as outperforming the others,
+   explicitly including OMT. Our counting argument would at best *explain* an
+   empirical gap others have already reported.
+5. **The area is actively theorised.** Convergence results for SEM (R-linear) and
+   for OMT (`O(1/m)`, `O(1/m²)` with Nesterov acceleration) are recent. A group is
+   publishing here yearly.
+
+**Verdict: the transport lane is not a research direction.** morsel's OMT is now a
+correct implementation of a known, dominated method — good library capability, not
+a contribution. Pursuing it would mean competing on a crowded problem against an
+active theory group, from behind.
+
+Caveats on the check, recorded honestly: it rested on abstracts and search
+summaries, not full papers. Three things were *not* resolved and would need the
+primary sources before this verdict is final —
+
+- whether published OMT parameterisations place mass at vertices (as ours does) or
+  per-face, which decides whether the deficit is intrinsic to OMT or an artefact of
+  the discretisation we inherited;
+- whether anyone computes power-cell areas *exactly* rather than by sampling, which
+  is the one thing morsel's implementation now does that may be unusual;
+- whether the DOF explanation for the OMT-vs-SEM gap has been stated anywhere.
+
+The methodological lesson is the useful part: **a literature check before building
+killed a lane in an afternoon.** That step stays first in every future lane.
 
 ### Where we start from
 
@@ -131,31 +152,31 @@ self-contained evening that holds no state between sessions.
 
 ## Design
 
-### The algorithm track (the spine)
+### The algorithm track (the spine) — being re-chosen
 
-All four live in semi-discrete transport, where the infrastructure is already
-ahead of what is published.
+The transport lane was the intended spine and the literature check retired it (see
+above). Nothing is committed in its place yet; that is the open decision, and
+picking badly is more costly than picking slowly.
 
-1. **Per-face transport, or a characterised compromise.** The direct response to
-   the obstruction above. If per-triangle area preservation needs per-triangle
-   degrees of freedom, then either move to a formulation that has them, or accept
-   a least-squares compromise and *characterise the residual* — a bound in terms
-   of `F/V`, mesh quality, and the conformal factor. Either outcome is a result;
-   the second is probably the more useful one.
-2. **Boundary-sliding transport.** Boundary vertices constrained to move *along*
-   the boundary curve — a 1D transport problem coupled to the 2D interior.
-   Currently the code offers only pinned (freezes a boundary layer) or free
-   (contracts the boundary inward and buys nothing). Neither is right and, as far
-   as we know, the constrained version is not well solved in the literature.
-3. **Exact-Hessian damped Newton.** The dual's Hessian has a closed form in shared
-   power-cell edge lengths. Cells are now exact polygons, so those lengths are
-   *available exactly* where everyone else estimates them. Replaces an ascent that
-   currently needs iterations growing linearly in vertex count.
-4. **Area preservation with guaranteed local injectivity.** Transport plus a
-   no-flip constraint, with the guarantee proved rather than observed.
+What survives from the transport work as *possible* narrow residue, in decreasing
+confidence:
 
-Each is stated as a property set first, so that the derivation — not a guess — is
-what produces the method.
+- **Exact power-cell geometry.** If sampled cell areas are the norm, exact polygon
+  cells are a genuine implementation advance, though the DOF count says they cannot
+  close the gap to SEM. Needs claim (2) in the caveats above checked first.
+- **Boundary-sliding transport.** Still unsolved in our code — pinned freezes a
+  boundary layer, free contracts it inward and buys nothing. Whether it is open in
+  the literature is unchecked.
+
+**Selection criteria for the replacement lane**, learned from this one:
+
+1. **Quiet, not crowded.** Avoid problems with an active group publishing
+   convergence theory annually.
+2. **Plays to the actual differentiators** — exact predicates, machine-checked
+   combinatorial invariants, a verified half-edge core. Those point toward
+   robustness of *combinatorial* algorithms rather than toward numerical
+   optimisation, where the field is strong and we are not differentiated.
+3. **Literature check first, always.** Before any implementation.
 
 ### Verification's role
 
@@ -238,18 +259,20 @@ compare numerically. Cheap to design in now, painful to retrofit.
 - [ ] Expose `geodesic` and the CVT/anisotropic remeshers in the CLI (~3,400
       lines of working code currently unreachable).
 
-### M1 — the first algorithmic result (≈ 6–18 months)
+### M1 — choose and open a lane (≈ 6–18 months)
 
-- [ ] Literature check: has the DOF-deficit obstruction for vertex-weighted
-      transport been stated? Has boundary-constrained semi-discrete transport been
-      solved? **Do this before building anything.**
-- [ ] Formalise `F = 2V − B − 2` and `deficit = V_interior − 1` in Lean. Small,
-      self-contained, needs only Euler's formula and arithmetic, and it converts a
-      measurement into a theorem. Executable form already in
-      `tests/omt_dof_deficit.rs`.
-- [ ] Derive and implement whichever of per-face transport or the characterised
-      least-squares residual the counting argument actually licenses.
-- [ ] Exact-Hessian Newton, so experiments stop being iteration-bound.
+- [x] Literature check on the transport lane. **Result: retired.** Per-triangle
+      area preservation is achievable by stretch/authalic energy minimisation, the
+      OMT-vs-SEM gap is already reported, and the area has active convergence
+      theory.
+- [ ] Read the primary sources for the three unresolved caveats above, so the
+      verdict rests on papers rather than abstracts.
+- [ ] Survey candidate lanes against the selection criteria, with a literature
+      check *per candidate* before any code.
+- [ ] Formalise `F = 2V − B − 2` and `deficit = V_interior − 1` anyway. It is a
+      small self-contained Lean exercise needing only Euler's formula, the
+      executable form is already in `tests/omt_dof_deficit.rs`, and it is a good
+      first calibration of the toolchain even though it is not a result.
 - [ ] Validate the heat method (`algo/geodesic/heat.rs`, 596 lines, never checked
       against the paper's error curves) — free calibration of what "matching
       published numbers" feels like, and it is not exposed in the CLI either.
@@ -282,12 +305,11 @@ compare numerically. Cheap to design in now, painful to retrofit.
 
 ## Open questions
 
-- **Is the DOF-deficit obstruction already known?** It is elementary enough that
-  it may be folklore. If so, the result is the *consequence* — a sharp bound on
-  achievable per-triangle distortion in terms of `V_interior`, mesh quality and
-  the conformal factor — rather than the counting itself. The measured plateau
-  narrows with refinement (±5% at 81 vertices, ±3% at 289), which suggests such a
-  bound exists and is worth deriving.
+- **What replaces the transport lane?** The open question, and the one that
+  matters. Criteria are recorded above; no candidate is chosen.
+- **Do the three unresolved caveats change the verdict?** Vertex vs per-face mass
+  placement in published OMT is the one that could — if they are per-face, our
+  deficit is inherited from the implementation rather than intrinsic.
 - **Per-face transport: does it even make sense?** Faces do not carry a natural
   dual cell. Possibly the right move is not per-face transport but accepting the
   deficit and characterising the residual sharply.
