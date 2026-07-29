@@ -548,9 +548,9 @@ impl PinnedReduction {
     fn new(triplets: &[(usize, usize, f64)], n_vertices: usize, pinned: usize) -> Self {
         let mut reduced_index = vec![None; n_vertices];
         let mut n_free = 0;
-        for v in 0..n_vertices {
+        for (v, slot) in reduced_index.iter_mut().enumerate() {
             if v != pinned {
-                reduced_index[v] = Some(n_free);
+                *slot = Some(n_free);
                 n_free += 1;
             }
         }

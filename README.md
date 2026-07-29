@@ -8,6 +8,9 @@
 
 Mesh processing in Rust
 
+> 📐 Direction lives in [`plans/ROADMAP.md`](plans/ROADMAP.md); conventions live in
+> [`AGENTS.md`](AGENTS.md).
+
 ## Tools
 
 ### morsel

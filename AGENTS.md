@@ -2,6 +2,11 @@
 
 A comprehensive 3D mesh processing library in Rust, designed for geometry processing research with a goal of novel research.
 
+Planning documents live in [`plans/`](plans/): [`ROADMAP.md`](plans/ROADMAP.md)
+for phased direction, `NNNN-*.md` for individual pieces of work. Keep the active
+plan current as you go and commit plan updates alongside the code they describe —
+see [`plans/README.md`](plans/README.md) for the template and conventions.
+
 ## Dependencies
 
 ### Local Path Dependencies (not published to crates.io)
