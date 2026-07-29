@@ -45,6 +45,28 @@ fix was not "barycentric is wrong, try something else." It was: *what lumping is
 consistent with a dual-cell partition?* — and mixed Voronoi is **forced**. The
 specification determined the algorithm. That is the move to scale up.
 
+### Independent confirmation of the spine, from numerical PDEs
+
+The same discipline is standard practice in a neighbouring field, which is worth
+knowing both as validation and as a source of mature theory.
+
+Gorard's *Shock with Confidence* (arXiv:2503.13877, 2025) generates hyperbolic PDE
+solvers and proves **L² stability, flux conservation and physical validity** of the
+generated code. Those are structure-preservation properties; the framing here is
+not novel as a *methodology*, only as an application to geometry processing.
+
+Numerical relativity has treated this as non-negotiable for decades. A scheme that
+lets the Hamiltonian and momentum constraints drift in an ADM/BSSN evolution does
+not merely lose accuracy — it blows up. Hence constraint damping and
+symmetric-hyperbolic reformulations.
+
+The mature mathematical theory underneath both is **finite element exterior
+calculus** (Arnold, Falk & Winther) and the mimetic-discretization literature: make
+the discrete complex preserve the cohomology and stability follows. That is the
+rigorous general form of what this plan reaches for with an ad-hoc property list,
+and it is a better foundation to build on than assembling the properties
+piecemeal. **Read FEEC before designing the property lattice.**
+
 ### The shape a formal instrument is best at: impossibility
 
 The template exists and is well known: Wardetzky, Mathur, Kälberer & Grinspun,
@@ -176,6 +198,9 @@ confidence:
    combinatorial invariants, a verified half-edge core. Those point toward
    robustness of *combinatorial* algorithms rather than toward numerical
    optimisation, where the field is strong and we are not differentiated.
+   Rounding-robust structural properties (conservation by telescoping, positivity,
+   orientation signs) are also now in scope — see the revision in
+   [`0001`](0001-formal-verification-in-lean.md).
 3. **Literature check first, always.** Before any implementation.
 
 ### Verification's role

@@ -50,7 +50,8 @@ The library stratifies cleanly, and the strata have very different prospects:
 | Half-edge topology | `twin`, `next`, `is_boundary_vertex`, `canonical_edge` | integer indices | **good** — Aeneas's sweet spot |
 | Index bookkeeping | `reduce_pinned_dofs`, `PinnedReduction` | integer indices | **good** |
 | Discrete-geometry specs | cotangent identities, mixed Voronoi areas, energy kernels | ℝ | **good** as ℝ-theorems, decoupled from the code |
-| Numerical kernels | CG, power-diagram sampling, QEM | f64 | **out of reach** |
+| Rounding-robust structure | conservation by telescoping, positivity, orientation signs | f64 | **reachable** with a weak float axiomatization |
+| Numerical error magnitudes | CG convergence rate, sampling error, QEM conditioning | f64 | **out of reach** |
 
 ### Tooling, as of July 2026
 
@@ -71,7 +72,57 @@ The library stratifies cleanly, and the strata have very different prospects:
   committing to a shape, since it is the closest published precedent to what
   Praxis would be doing here.
 
-### Why f64 is out
+### Why f64 error analysis is out — but float *structure* is not
+
+**Revised 2026-07-29.** An earlier version of this section ruled out all reasoning
+about floating-point computation. That was too strong, and the correction matters
+enough to change what we aim at.
+
+The distinction is between:
+
+- **Rounding-error analysis** — bounding the deviation of a float computation from
+  its exact counterpart. This genuinely is out of reach in Lean today, for the
+  reasons below.
+- **Rounding-robust structural properties** — statements that hold for float
+  arithmetic *regardless* of rounding, because they never rely on an identity that
+  floats violate. These are reachable, and they are exactly the properties this
+  program cares about.
+
+Examples of the second kind:
+
+- **Conservation by telescoping.** If a scheme computes each face flux once and
+  adds that float to one cell while subtracting the *identical* float from its
+  neighbour, the sum cancels exactly — same bits, opposite sign, no error term.
+  Contrast computing the flux twice from each side, where it does not.
+- **Positivity.** A sum of non-negative floats is non-negative under any rounding.
+- **Sign and ordering.** Orientation predicates, inequality-based invariants.
+- **Monotonicity / TVD-style conditions**, being inequalities between computed
+  quantities.
+
+The precedent is Gorard, *Shock with Confidence: Formal Proofs of Correctness for
+Hyperbolic PDE Solvers* (arXiv:2503.13877, 2025): a pipeline that generates a
+solver from an equation system, emits C, and proves L² stability, flux
+conservation and physical validity of the generated code — while "fully
+respecting the algebraic structure of floating-point arithmetic." It uses a
+custom theorem-proving and automatic-differentiation framework in Racket rather
+than a general proof assistant.
+
+Two things to take from it:
+
+1. **Aim at a minimal float axiomatization, not full IEEE-754.** `FloatSpec`'s goal
+   (a Flocq port) is the complete model, and its deep proofs are still largely
+   placeholders. A weak axiom set — ordering, sign, exact negation, non-negative
+   closure under addition — is far smaller and sufficient for everything above.
+   Lean's `Float` being opaque means such axioms must be *added*; that is a
+   tractable, well-scoped piece of work rather than a blocker.
+2. **Generate-then-prove may beat write-then-verify.** Proving properties of
+   *generated* code from a specification scales where retrofitting proofs onto
+   hand-written code does not. The analogue here: specify a discrete operator by
+   its structural properties, generate the Rust, prove the generation. Also worth
+   noting a bespoke prover can beat a general one for a narrow domain, trading
+   Mathlib for tractability — hold that as a live option rather than assuming Lean.
+
+### Why full f64 error analysis is out
 
 Charon's LLBC *does* represent floats (`FloatTy` covers F16/F32/F64/F128), so
 extraction won't reject the code outright. The obstacle is downstream: **Lean's
@@ -90,6 +141,8 @@ Even with a mature float library, the targets here would be hard: CG convergence
 rate, the `O(1/√k)` sampling error on power-cell areas, QEM's conditioning. That's
 numerical analysis, not the kind of discrete statement that closes with `omega`
 and `simp`.
+
+So the boundary is: *error magnitudes* out, *rounding-robust structure* in.
 
 ### Relationship to Praxis
 
