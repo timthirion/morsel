@@ -276,8 +276,28 @@ compare numerically. Cheap to design in now, painful to retrofit.
 - [ ] Measurement harness beyond parameterization: Hausdorff / Frechet
       (approxum has them), triangle-quality histograms, volume and area
       preservation. Designed so a C++ baseline drops in as another implementation.
-- [ ] A degenerate-input corpus: obtuse triangles, slivers, cocircular lattices,
-      non-manifold edges, unreferenced vertices, inconsistent winding.
+- [x] A degenerate-input corpus (`tests/common/mod.rs`, 18 cases) plus a
+      robustness sweep over every algorithm (`tests/robustness_sweep.rs`),
+      recorded as a characterization baseline. Findings, in severity order:
+      - **QEM decimation corrupts valid meshes, non-deterministically** — 3 of 8
+        runs on the plain control grid, identically with `parallel` true and
+        false, so the cause is not the parallelism. The library uses
+        `std::collections::HashMap`, whose iteration order is randomised per
+        process, so the collapse sequence varies and only some sequences break.
+        `morsel decimate` is a shipping command; this is the top item.
+      - **`build_from_triangles` accepts 5 invalid inputs and returns a corrupt
+        half-edge structure** with `Ok` — non-manifold edges and vertices,
+        inconsistent winding, duplicate vertices, duplicate faces. It is the
+        library's entry point, so everything downstream inherits it. Fixing this
+        one clears most of the matrix.
+      - **8 panics**, every one dereferencing the invalid-index sentinel
+        (`u32::MAX`) without a validity check, across curvature, geodesics,
+        remeshing and subdivision.
+      - Scale-relative thresholds are missing: `tiny_scale` (coords ~1e-6) makes
+        the heat method and OMT refuse.
+      The sweep separates *inherited* from *caused* corruption, which mattered —
+      before that distinction the table blamed vertex smoothing for breaking
+      half-edge twins, which it cannot do, since it never touches connectivity.
 - [ ] Mesh `repair` and a seam/cut generator — without them
       `morsel parameterize examples/stanford-bunny.obj -m omt` fails, because
       every bundled example is closed and LSCM/ARAP/OMT all need boundary.
