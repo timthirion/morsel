@@ -4,6 +4,15 @@
 - **Last updated:** 2026-07-29
 - **Last touched on:** macOS laptop, Claude Code session — plan written, no code yet
 
+> **Scope note.** This plan is the *engineering* half of
+> [`0002-research-program.md`](0002-research-program.md), which sets the research
+> thesis and the decade-scale target. Read that first; it also revises the
+> priority below. Originally the two tiers were treated as roughly co-equal. They
+> are not: the ℝ-specifications are where every research result lives, and Rust
+> extraction can never reach the numerical code at all. **Lead with Tier A. Treat
+> Tier B as opportunistic** — valuable for library confidence, not a research
+> output.
+
 ## Goal
 
 Get machine-checked proofs for the parts of morsel that admit them, and be
@@ -11,10 +20,12 @@ explicit about the parts that don't. Two targets, in order of payoff:
 
 1. **The mathematical specifications** the numerical code implements — cotangent
    identities, dual-cell areas, energy kernels, scale invariance. These are
-   theorems over ℝ in Mathlib, provable today, and independent of any Rust.
+   theorems over ℝ in Mathlib, provable today, and independent of any Rust. *This
+   is the priority; it is where the research contributions are.*
 2. **The combinatorial layer** — half-edge invariants and index bookkeeping,
    extracted from the actual Rust via Charon/Aeneas into Lean. Integer arithmetic
-   over indices, which is exactly the subset those tools handle.
+   over indices, which is exactly the subset those tools handle. Buys confidence
+   in the library; does not by itself produce a result.
 
 Explicitly **not** a goal: verifying f64 numerics. See *Out of scope*.
 
@@ -166,6 +177,13 @@ through the full pipeline. Ordered by increasing risk:
    incident half-edge's twin has no face. Requires modelling the mesh
    representation, so expect this to need hand-transcription rather than clean
    extraction.
+
+   These now exist as executable properties in
+   `tests/halfedge_invariants.rs`, asserted over ten fixtures. That is the
+   cheapest possible version of this work and it should be treated as the
+   specification to formalize against: the Lean statements and the Rust
+   assertions should say the same thing, so a divergence between them is itself
+   informative.
 4. **Euler characteristic** — `V − E + F = 2 − 2g − b`, checked for the disk case
    (`= 1`) the parameterizers require. The most valuable and the hardest; genus
    needs a real definition.

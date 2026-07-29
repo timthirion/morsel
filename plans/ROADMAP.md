@@ -55,10 +55,16 @@ reports success while its output is visibly wrong, suspect that shape first.
 Phases are roughly ordered; boundaries are soft. Each becomes one or more
 `plans/NNNN-*.md` as work starts.
 
+### Research program — `plans/0002`
+The north star. morsel, approxum and Praxis as one program built on a single
+thesis: formalization finds errors testing structurally cannot — a discrete
+specification that does not satisfy its assumed property — and the corrected
+mathematics is the research result. Horizon is deliberately 2–10 years. **active**
+
 ### Formal verification in Lean 4 — `plans/0001`
-Machine-checked proofs for the parts of morsel that admit them: the combinatorial
-half-edge invariants, and the mathematical specifications the numerical code
-implements. Deliberately does **not** attempt f64 numerics. **active**
+The engineering half of `0002`: machine-checked proofs for the parts of morsel
+that admit them, prioritising the mathematical specifications over Rust
+extraction. Deliberately does **not** attempt f64 numerics. **active**
 
 ### Candidate directions — not yet committed
 
