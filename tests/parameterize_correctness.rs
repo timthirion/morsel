@@ -200,3 +200,59 @@ fn boundary_requiring_methods_reject_closed_meshes() {
     assert!(lscm(&mesh, &LSCMOptions::default()).is_err());
     assert!(arap(&mesh, &ARAPOptions::default()).is_err());
 }
+
+/// Two distinct pins are what remove the conformal energy's similarity kernel.
+/// Pinning one vertex twice leaves the reduced system singular, so it must be
+/// rejected up front rather than handed to the solver.
+#[test]
+fn lscm_rejects_degenerate_pins() {
+    use morsel::algo::parameterize::PinnedVertex;
+
+    let mesh = flat_grid(4);
+    let opts = LSCMOptions::with_pins(
+        PinnedVertex::new(0, 0.0, 0.0),
+        PinnedVertex::new(0, 1.0, 0.0),
+    );
+    assert!(
+        lscm(&mesh, &opts).is_err(),
+        "pinning the same vertex twice should be rejected"
+    );
+
+    let out_of_range = LSCMOptions::with_pins(
+        PinnedVertex::new(0, 0.0, 0.0),
+        PinnedVertex::new(9999, 1.0, 0.0),
+    );
+    assert!(
+        lscm(&mesh, &out_of_range).is_err(),
+        "an out-of-range pin index should be rejected"
+    );
+}
+
+/// The conformal energy is homogeneous, so scaling both pin targets scales the
+/// whole solution — and normalized UVs are therefore unchanged. This holds only
+/// because the pins are imposed exactly; a penalty term has its own fixed
+/// magnitude and would not commute with the scaling.
+#[test]
+fn lscm_is_invariant_to_pin_scale() {
+    use morsel::algo::parameterize::PinnedVertex;
+
+    let mesh = paraboloid(6);
+    let solve = |scale: f64| {
+        let opts = LSCMOptions::with_pins(
+            PinnedVertex::new(0, 0.0, 0.0),
+            PinnedVertex::new(mesh.num_vertices() - 1, scale, 0.1 * scale),
+        );
+        lscm(&mesh, &opts).unwrap()
+    };
+
+    let a = solve(1.0);
+    let b = solve(50.0);
+
+    for vid in mesh.vertex_ids() {
+        let (pa, pb) = (a.get(vid), b.get(vid));
+        assert!(
+            (pa - pb).norm() < 1e-6,
+            "normalized UVs should not depend on pin scale: {pa:?} vs {pb:?}"
+        );
+    }
+}

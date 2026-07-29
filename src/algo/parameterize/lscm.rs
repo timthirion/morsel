@@ -24,29 +24,34 @@ pub struct LSCMOptions {
     pub pin_strategy: PinStrategy,
 
     /// Maximum iterations for the conjugate gradient solver.
+    ///
+    /// With the pins eliminated the system is just a mesh Laplacian, so the
+    /// iteration count grows with refinement rather than with any penalty.
+    /// Reaching `tolerance = 1e-10` on a flat grid took:
+    ///
+    /// | vertices | iterations |
+    /// |----------|------------|
+    /// | 25       | 14         |
+    /// | 289      | 81         |
+    /// | 1089     | 301        |
+    /// | 5041     | 1117       |
+    ///
+    /// The default leaves room for meshes well past that; each iteration is one
+    /// sparse mat-vec, so an unused allowance costs nothing. Exceeding it is
+    /// reported as [`MeshError::ConvergenceFailed`] rather than passed off as a
+    /// result.
     pub max_iterations: usize,
 
     /// Convergence tolerance for the CG solver, as a *relative* residual
     /// `‖r‖ / ‖b‖`.
     ///
-    /// This has to be much tighter than it looks. Pin constraints are imposed
-    /// by a penalty term (see `build_lscm_system`), so `‖b‖` is dominated by
-    /// `penalty × pin_target` while the conformal-energy rows are of order 1.
-    /// A relative tolerance of `1e-8` against a `‖b‖` of ~`1e6` leaves an
-    /// absolute residual of ~`1e-2` in the rows that actually carry the
-    /// geometry — enough to wreck the result, and progressively worse as the
-    /// mesh grows. Measured on a flat grid, whose exact answer is the identity:
-    ///
-    /// | vertices | `tol = 1e-8` | `tol = 1e-12` |
-    /// |----------|--------------|---------------|
-    /// | 25       | 5.7e-4       | 5.8e-9        |
-    /// | 81       | **1.3e0**    | 2.3e-7        |
-    /// | 289      | **1.8e0**    | 3.4e-7        |
-    ///
-    /// `1e-12` is about the floor for a `1e6` penalty; asking for `1e-14`
-    /// exhausts the iteration budget without converging. Eliminating the
-    /// pinned degrees of freedom instead of penalizing them would remove this
-    /// coupling altogether and is the better long-term fix.
+    /// Pins are imposed by eliminating their degrees of freedom (see
+    /// [`reduce_pinned_dofs`]), so both the matrix and `‖b‖` are on the scale of
+    /// the conformal energy itself and this value means what it appears to mean.
+    /// An earlier penalty formulation coupled the two: it inflated `‖b‖` to
+    /// `λ · pin_target`, so a `1e-8` relative tolerance left an absolute
+    /// residual of ~`1e-2` in the rows carrying the geometry and LSCM returned
+    /// wrong maps while reporting success. That coupling is gone.
     pub tolerance: f64,
 }
 
@@ -54,8 +59,11 @@ impl Default for LSCMOptions {
     fn default() -> Self {
         Self {
             pin_strategy: PinStrategy::Automatic,
-            max_iterations: 1000,
-            tolerance: 1e-12,
+            max_iterations: 20_000,
+            // Now that the residual is a meaningful error proxy, the resulting
+            // area error tracks this value directly: 1e-10 in gives ~1e-9 of
+            // distortion on a case whose exact answer is the identity.
+            tolerance: 1e-10,
         }
     }
 }
@@ -166,27 +174,49 @@ pub fn lscm<I: MeshIndex>(mesh: &HalfEdgeMesh<I>, options: &LSCMOptions) -> Resu
         PinStrategy::Manual(p0, p1) => (*p0, *p1),
     };
 
-    // Build the LSCM system
-    let (matrix, rhs) = build_lscm_system(&vertices, &faces, n_vertices, &pin0, &pin1);
-
-    // Solve using conjugate gradient
-    let solution = preconditioned_conjugate_gradient(
-        &matrix,
-        &rhs,
-        None,
-        options.max_iterations,
-        options.tolerance,
-    )?;
-
-    // Extract UV coordinates from solution
-    let mut uv_coords = vec![Point2::origin(); n_vertices];
-    for i in 0..n_vertices {
-        uv_coords[i] = Point2::new(solution[i], solution[n_vertices + i]);
+    if pin0.vertex >= n_vertices || pin1.vertex >= n_vertices {
+        return Err(MeshError::InvalidState(format!(
+            "pinned vertex out of range: {} / {} (mesh has {n_vertices} vertices)",
+            pin0.vertex, pin1.vertex
+        )));
+    }
+    if pin0.vertex == pin1.vertex {
+        // Two distinct vertices are what remove the similarity kernel; pinning
+        // one twice leaves the system singular.
+        return Err(MeshError::InvalidState(format!(
+            "LSCM needs two distinct pinned vertices, both were {}",
+            pin0.vertex
+        )));
     }
 
-    // Set pinned vertices exactly
+    // Assemble the conformal energy, then impose the pins by elimination.
+    let triplets = build_conformal_normal_equations(&vertices, &faces, n_vertices);
+    let (matrix, rhs, reduced_index) = reduce_pinned_dofs(&triplets, n_vertices, &pin0, &pin1);
+
+    // Pinned vertices are exact by construction; the rest come from the solve.
+    let mut uv_coords = vec![Point2::origin(); n_vertices];
     uv_coords[pin0.vertex] = Point2::new(pin0.u, pin0.v);
     uv_coords[pin1.vertex] = Point2::new(pin1.u, pin1.v);
+
+    // A mesh of only the two pinned vertices has nothing left to solve for.
+    if matrix.nrows() > 0 {
+        let solution = preconditioned_conjugate_gradient(
+            &matrix,
+            &rhs,
+            None,
+            options.max_iterations,
+            options.tolerance,
+        )?;
+
+        for i in 0..n_vertices {
+            if let Some(r) = reduced_index[i] {
+                uv_coords[i].x = solution[r];
+            }
+            if let Some(r) = reduced_index[n_vertices + i] {
+                uv_coords[i].y = solution[r];
+            }
+        }
+    }
 
     let mut uv_map = UVMap::new(uv_coords);
     uv_map.normalize();
@@ -303,28 +333,26 @@ fn select_farthest_boundary_pair(
     )
 }
 
-/// Build the LSCM system matrix and right-hand side.
+/// Assemble the unconstrained conformal normal equations `A^T A`.
 ///
-/// The LSCM energy can be written as:
-/// E = ||A * [u; v] - b||²
+/// The LSCM energy is `E = ‖A · [u; v]‖²`, a homogeneous quadratic — it has no
+/// linear term, because every constraint is a conformality condition rather than
+/// a target value. Its minimizer is only determined up to a similarity of the
+/// plane (translation, rotation, scale: a four-dimensional kernel), which is
+/// exactly what pinning two vertices removes.
 ///
-/// where A encodes the conformal constraints and b handles the pinned vertices.
+/// The pins are *not* applied here. See [`reduce_pinned_dofs`].
 ///
-/// We solve the normal equations: A^T * A * x = A^T * b
-fn build_lscm_system(
+/// Indexing: DOF `i` is `u` of vertex `i`, DOF `n + i` is `v` of vertex `i`.
+fn build_conformal_normal_equations(
     vertices: &[Point3<f64>],
     faces: &[[usize; 3]],
     n_vertices: usize,
-    pin0: &PinnedVertex,
-    pin1: &PinnedVertex,
-) -> (CsrMatrix, DVector<f64>) {
-    // The system has 2n unknowns (u and v for each vertex)
-    // The matrix is 2n x 2n
+) -> Vec<(usize, usize, f64)> {
     let n = n_vertices;
 
     // Collect triplets for the matrix
     let mut triplets: Vec<(usize, usize, f64)> = Vec::new();
-    let mut rhs = DVector::zeros(2 * n);
 
     // For each triangle, add conformal energy terms
     for face in faces {
@@ -429,28 +457,75 @@ fn build_lscm_system(
         }
     }
 
-    // Handle pinned vertices by adding large penalty terms
-    // This is the penalty method: add λ * (u_pin - u_target)² to the energy
-    // Penalty should be large enough to enforce pin constraints but not so large
-    // that it overwhelms the conformal energy and causes numerical issues.
-    // A penalty of ~1e6 works well for typical mesh scales.
-    let penalty = 1e6;
+    triplets
+}
 
-    // Pin vertex 0
-    triplets.push((pin0.vertex, pin0.vertex, penalty));
-    triplets.push((n + pin0.vertex, n + pin0.vertex, penalty));
-    rhs[pin0.vertex] = penalty * pin0.u;
-    rhs[n + pin0.vertex] = penalty * pin0.v;
+/// Impose the pin constraints by *eliminating* the pinned degrees of freedom
+/// rather than penalizing them.
+///
+/// Partition the unknowns into free and pinned, `x = [x_f; x_p]`. Minimizing
+/// `xᵀ M x` over `x_f` with `x_p` held fixed gives
+///
+/// ```text
+///     M_ff x_f = −M_fp x_p
+/// ```
+///
+/// so the pinned columns move to the right-hand side and the pinned rows drop
+/// out. `M_ff` is symmetric positive definite — fixing two vertices removes the
+/// similarity kernel exactly — and, crucially, its condition number is the
+/// mesh's own. The penalty formulation this replaces instead added `λ` to four
+/// diagonal entries, which inflated the condition number by `λ` and inflated
+/// `‖b‖` to `λ · pin_target`, making a *relative* residual test meaningless:
+/// at `λ = 10⁶` a `1e-8` relative tolerance still permitted an absolute
+/// residual of `10⁻²` in the rows carrying the geometry, and LSCM returned
+/// visibly wrong maps above ~50 vertices while reporting convergence.
+///
+/// Returns the reduced matrix, its right-hand side, and a map from each global
+/// DOF to its reduced index (`None` for pinned DOFs).
+fn reduce_pinned_dofs(
+    triplets: &[(usize, usize, f64)],
+    n_vertices: usize,
+    pin0: &PinnedVertex,
+    pin1: &PinnedVertex,
+) -> (CsrMatrix, DVector<f64>, Vec<Option<usize>>) {
+    let n = n_vertices;
+    let n_dofs = 2 * n;
 
-    // Pin vertex 1
-    triplets.push((pin1.vertex, pin1.vertex, penalty));
-    triplets.push((n + pin1.vertex, n + pin1.vertex, penalty));
-    rhs[pin1.vertex] = penalty * pin1.u;
-    rhs[n + pin1.vertex] = penalty * pin1.v;
+    // Fixed value per pinned DOF.
+    let mut pinned_value = vec![None; n_dofs];
+    pinned_value[pin0.vertex] = Some(pin0.u);
+    pinned_value[n + pin0.vertex] = Some(pin0.v);
+    pinned_value[pin1.vertex] = Some(pin1.u);
+    pinned_value[n + pin1.vertex] = Some(pin1.v);
 
-    let matrix = CsrMatrix::from_triplets(2 * n, 2 * n, triplets);
+    // Compact the free DOFs into a contiguous range.
+    let mut reduced_index = vec![None; n_dofs];
+    let mut n_free = 0;
+    for dof in 0..n_dofs {
+        if pinned_value[dof].is_none() {
+            reduced_index[dof] = Some(n_free);
+            n_free += 1;
+        }
+    }
 
-    (matrix, rhs)
+    let mut reduced_triplets: Vec<(usize, usize, f64)> = Vec::with_capacity(triplets.len());
+    let mut rhs = DVector::zeros(n_free);
+
+    for &(row, col, value) in triplets {
+        // A pinned row is not an equation we solve.
+        let Some(r) = reduced_index[row] else { continue };
+
+        match pinned_value[col] {
+            // Known column: fold its contribution into the right-hand side.
+            Some(fixed) => rhs[r] -= value * fixed,
+            // Free column: keep it in the matrix.
+            None => reduced_triplets.push((r, reduced_index[col].unwrap(), value)),
+        }
+    }
+
+    let matrix = CsrMatrix::from_triplets(n_free, n_free, reduced_triplets);
+
+    (matrix, rhs, reduced_index)
 }
 
 #[cfg(test)]
