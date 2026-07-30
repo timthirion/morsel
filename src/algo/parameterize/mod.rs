@@ -52,4 +52,4 @@ mod uv;
 pub use arap::{arap, ARAPOptions};
 pub use lscm::{lscm, LSCMOptions, PinStrategy, PinnedVertex};
 pub use omt::{compute_area_distortion, omt, omt_with_report, OMTOptions, OMTReport};
-pub use uv::{cylindrical_projection, UVMap};
+pub use uv::{cylindrical_projection, layout_mesh, UVMap};

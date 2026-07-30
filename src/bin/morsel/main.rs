@@ -5,7 +5,7 @@
 //! Run `morsel --help` for available commands.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -134,6 +134,13 @@ enum Commands {
         /// The written mesh is the cut one, since the UVs index it.
         #[arg(long)]
         cut: bool,
+
+        /// Also write the UV layout as a flat mesh, with each vertex
+        /// at (u, v, 0). Useful for seeing the flattening itself:
+        /// folds and collapsed regions are plain here and nearly
+        /// invisible on the textured 3D model.
+        #[arg(long, value_name = "FILE")]
+        layout: Option<PathBuf>,
     },
 
     /// Cut a mesh open until it has one boundary loop (disk topology)
@@ -231,8 +238,8 @@ enum ParameterizeMethod {
     /// the back of the projection axis where `atan2` wraps)
     Cylindrical,
     /// LSCM — Least Squares Conformal Maps. Angle-preserving;
-    /// requires the mesh to have boundary (disk topology). Closed
-    /// meshes need a manual cut before this works.
+    /// requires disk topology (exactly one boundary loop). Pass
+    /// --cut to open a closed or multi-hole mesh first.
     Lscm,
     /// ARAP — As-Rigid-As-Possible. Higher quality than LSCM but
     /// also needs boundary. Iterative.
@@ -315,8 +322,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             method,
             material,
             cut,
+            layout,
         } => {
-            cmd_parameterize(&input, &output, method, material.as_deref(), cut)?;
+            cmd_parameterize(
+                &input,
+                &output,
+                method,
+                material.as_deref(),
+                cut,
+                layout.as_deref(),
+            )?;
         }
 
         Commands::Cut { input, output } => {
@@ -878,6 +893,7 @@ fn cmd_parameterize(
     method: ParameterizeMethod,
     material: Option<&str>,
     cut: bool,
+    layout: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use morsel::io::obj as obj_io;
 
@@ -997,6 +1013,12 @@ fn cmd_parameterize(
         }
     }
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
+
+    if let Some(layout) = layout {
+        let flat = parameterize::layout_mesh(&mesh, &uvs)?;
+        io::save(&flat, layout)?;
+        println!("Wrote UV layout: {}", layout.display());
+    }
 
     Ok(())
 }

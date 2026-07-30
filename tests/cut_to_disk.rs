@@ -5,7 +5,9 @@
 //! topology.
 
 use morsel::algo::cut::cut_to_disk;
-use morsel::algo::parameterize::{arap, lscm, ARAPOptions, LSCMOptions};
+use morsel::algo::parameterize::{
+    arap, compute_area_distortion, layout_mesh, lscm, ARAPOptions, LSCMOptions,
+};
 use morsel::mesh::HalfEdgeMesh;
 
 fn load(name: &str) -> HalfEdgeMesh {
@@ -143,4 +145,58 @@ fn a_disconnected_mesh_is_refused() {
 
     let err = cut_to_disk(&mesh).unwrap_err().to_string();
     assert!(err.contains("disconnected"), "unhelpful message: {err}");
+}
+
+/// A cylinder is *developable*: it can be flattened with no stretching at all. So the
+/// isometric unrolling has zero conformal energy, which makes it exactly the minimiser
+/// LSCM is looking for — and cutting the cylinder's two boundary loops into one is all
+/// that stands in the way.
+///
+/// This is the strongest correctness check available for the cut, because the answer is
+/// known in closed form rather than merely plausible: every triangle must come out with
+/// the same area it went in with, up to one global scale. A cut that joined the loops
+/// but mismatched the two sides would still be a disk and would still flatten, just not
+/// isometrically.
+#[test]
+fn a_cut_cylinder_unrolls_isometrically() {
+    let mesh = load("cylinder");
+    assert_eq!(mesh.boundary_loop_count(), 2);
+
+    let (cut, report) = cut_to_disk(&mesh).unwrap();
+    assert_eq!(report.paths_cut, 1, "one cut should merge two loops");
+
+    let uvs = lscm(&cut, &LSCMOptions::default()).unwrap();
+    let (min_ratio, max_ratio, rms) = compute_area_distortion(&cut, &uvs);
+
+    // `compute_area_distortion` divides out the global scale factor, so an isometry up
+    // to uniform scaling reads as a ratio of exactly 1 everywhere.
+    assert!(
+        (min_ratio - 1.0).abs() < 1e-6 && (max_ratio - 1.0).abs() < 1e-6,
+        "developable surface did not unroll isometrically: \
+         ratios {min_ratio:.9}..{max_ratio:.9}, rms {rms:.2e}"
+    );
+}
+
+/// The layout is the flattening as a mesh in its own right, so it has to keep the
+/// connectivity it came from — that is what makes it a faithful picture of the map.
+#[test]
+fn the_uv_layout_is_the_same_mesh_laid_flat() {
+    let mesh = load("cylinder");
+    let (cut, _) = cut_to_disk(&mesh).unwrap();
+    let uvs = lscm(&cut, &LSCMOptions::default()).unwrap();
+
+    let flat = layout_mesh(&cut, &uvs).unwrap();
+
+    assert_eq!(flat.num_vertices(), cut.num_vertices());
+    assert_eq!(flat.num_faces(), cut.num_faces());
+    assert_eq!(
+        flat.boundary_loop_count(),
+        1,
+        "a flattened disk is still a disk"
+    );
+    for v in flat.vertex_ids() {
+        let p = flat.position(v);
+        let uv = uvs.get(v);
+        assert_eq!((p.x, p.y, p.z), (uv.x, uv.y, 0.0));
+    }
 }

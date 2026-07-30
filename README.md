@@ -43,6 +43,61 @@ topology, which this mesh does not have — it has four boundary loops around th
 morsel-view examples/stanford-bunny.obj --texture images/UV.png --screenshot out.png
 ```
 
+### Cutting a surface open to flatten it
+
+<p align="center">
+  <img src="images/examples/cut-cylinder-layout.png" alt="A cylinder cut along one path and flattened by LSCM, unrolling to an exact rectangle" width="49%">
+  <img src="images/examples/cut-sphere-layout.png" alt="A sphere slit open and flattened by LSCM, forming a disk with a notch where the slit runs" width="49%">
+</p>
+
+Both images are the **UV layout** rather than the 3D mesh: every vertex moved to
+`(u, v, 0)`, which is what `--layout` writes. Looking at the layout is how you check a
+flattening — a fold or a collapsed region is obvious here and nearly invisible on the
+textured model.
+
+**Left — a cylinder,** which starts with two boundary loops. One cut between them
+merges the loops, and the result unrolls to a rectangle. Not approximately: the area
+ratio is `1.000` on all 864 faces, to within `1.1e-10`. That is the right answer
+rather than a lucky one, because a cylinder is *developable* — it can be flattened
+without stretching at all, the isometric unrolling therefore has zero conformal
+energy, and so it is exactly what LSCM's minimisation finds. The 45° tilt carries no
+meaning: the map is fixed only up to a similarity, set by which two vertices LSCM
+pinned.
+
+**Right — a sphere,** which is closed and so has no loop to merge; a single slit opens
+it instead. The whole outline of that shape *is* the cut: the slit's two sides, twelve
+edges each, pulled apart by the flattening and meeting only at the two *tips*. The
+tips are the one place the cut deliberately leaves a vertex unduplicated — splitting a
+slit's endpoints would tear the surface into two pieces rather than open it. A sphere
+is not developable, so distortion is unavoidable here and the area ratio runs from
+`0.16` to `8.1`; the tightest knot of triangles is the mesh's 16-valent pole, not
+anything to do with the seam.
+
+```sh
+morsel parameterize examples/cylinder.obj cyl.obj --method lscm --cut --layout cyl-layout.obj
+morsel-view cyl-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.3 \
+  --size 620x620 --screenshot out.png
+```
+
+<p align="center">
+  <img src="images/examples/cut-bunny-layout.png" alt="The Stanford bunny cut and flattened by LSCM, showing dense regions where triangles collapse" width="49%">
+</p>
+
+**Where this stops being good enough.** The bunny's four holes are joined by three
+cuts, each the shortest path available — and a shortest path is *short*, not well
+placed. LSCM's worst area ratio on the result is `50.3`, and its smallest triangle
+gets `2e-9` of the area it should; the dark blobs are hundreds of triangles piled into
+a few pixels. Nothing is wrong topologically, and this is the honest state of the
+seam placement: the cut generator solves the topology, and choosing *where* to cut so
+the flattening is usable is a separate problem, tracked in
+[`plans/ROADMAP.md`](plans/ROADMAP.md).
+
+```sh
+morsel parameterize examples/stanford-bunny.obj bunny.obj --method lscm --cut --layout bunny-layout.obj
+morsel-view bunny-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.35 \
+  --size 620x620 --screenshot out.png
+```
+
 ### Geodesic distance
 
 <p align="center">

@@ -225,6 +225,36 @@ pub fn cylindrical_projection<I: MeshIndex>(mesh: &crate::mesh::HalfEdgeMesh<I>)
     UVMap::new(coords)
 }
 
+/// The UV layout as a mesh in its own right: the same triangles, with each vertex
+/// moved to `(u, v, 0)`.
+///
+/// This is the flattening made visible. A parameterization is a claim about the mesh
+/// — that it can be laid out flat with bounded distortion — and looking at the layout
+/// is how you check the claim. A cut that failed to open the surface, a fold, or a
+/// region squeezed to nothing all show up plainly here and are close to invisible on
+/// the textured 3D model.
+///
+/// Connectivity is unchanged, so this only fails if the input mesh could not be
+/// rebuilt at all. Note that the result may well be geometrically degenerate — the
+/// flattened triangles can be slivers or flipped, and that is information, not an
+/// error.
+pub fn layout_mesh<I: MeshIndex>(
+    mesh: &crate::mesh::HalfEdgeMesh<I>,
+    uvs: &UVMap<I>,
+) -> crate::error::Result<crate::mesh::HalfEdgeMesh<I>> {
+    use nalgebra::Point3;
+
+    let (_, faces) = crate::mesh::to_face_vertex(mesh);
+    let flat: Vec<Point3<f64>> = mesh
+        .vertex_ids()
+        .map(|v| {
+            let uv = uvs.get(v);
+            Point3::new(uv.x, uv.y, 0.0)
+        })
+        .collect();
+    crate::mesh::build_from_triangles(&flat, &faces)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
