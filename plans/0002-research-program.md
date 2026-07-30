@@ -426,9 +426,38 @@ compare numerically. Cheap to design in now, painful to retrofit.
       floating-point *bit pattern*, since two collapse orders can agree to fifteen digits
       and still differ.
 
-      Still outstanding, and unrelated to determinism: `is_collapse_valid` is not
-      airtight, so the back-off still fires on the bunny (2484 faces requested, 3725
-      delivered) and the cylinder. Reproducibly, and the caller is told.
+- [x] **The collapse validity check is fixed and the back-off no longer fires** (July
+      2026). `is_collapse_valid` already had the right rule — an interior edge with both
+      endpoints on the boundary cannot be collapsed, because pinching two stretches of
+      boundary together makes a bowtie — but the boundary flags it consulted were computed
+      once, with a comment asserting that "a legal collapse never moves a vertex onto the
+      boundary". That is false, and false in the unsafe direction: collapsing an interior
+      edge with one boundary endpoint leaves the survivor holding the other's boundary
+      edges, so an interior vertex becomes a boundary vertex, and deleting a collapsed
+      edge's faces can leave a formerly interior edge with a single face.
+
+      Determinism from the previous change is what made this findable: the failing collapse
+      was reproducible, so instrumenting a rebuild after every collapse pinned it to one
+      edge. On the Stanford bunny, edge (331, 1352) had `FRESH_boundary=(true, true)` and
+      `CACHED_boundary=(false, false)`, so the rule silently did not apply. One missed
+      rejection was the whole cause.
+
+      Updating the flags is cheap and provably sufficient: faces are only ever deleted, so
+      an edge's live-face count only decreases and a vertex can gain boundary status but
+      never lose it — the flags are monotone. Every face a collapse deletes is incident to
+      the two endpoints, and every edge of those faces ends up incident to the survivor, so
+      the vertices whose status can change are exactly the survivor and its current
+      neighbours.
+
+      Result: every bundled mesh now reaches its requested face count on the first attempt.
+      The bunny goes to 2483 faces of a requested 2484, where it used to stop at 3725.
+
+      This also exposed a second dishonesty. `attempt()` returns whatever it achieved, so
+      "rebuilt" was being reported as `Completed` even when the loop ran out of safe
+      collapses above the target — seven corpus meshes did that, including two-face meshes
+      asked to become one face. There is now a `DecimateOutcome::Exhausted` for it.
+      `BackedOff` and `Refused` are kept but should be unreachable; they are the guard
+      against a topological argument turning out not to be a proof.
 - [ ] Expose `geodesic` in the CLI. The CVT and anisotropic remeshers are exposed
       now (`morsel remesh --method cvt|anisotropic`) and covered by the sweep.
 

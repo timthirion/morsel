@@ -724,6 +724,16 @@ fn cmd_decimate(
     // from the face count and every cause described as if it might apply.
     match report.outcome {
         decimate::DecimateOutcome::Completed | decimate::DecimateOutcome::NothingRequested => {}
+        decimate::DecimateOutcome::Exhausted => {
+            eprintln!(
+                "note: stopped at {} faces rather than the requested {}. No remaining edge \
+                 can be collapsed without tearing the surface — often the request is simply \
+                 not reachable, and an interior edge with both endpoints on a boundary never \
+                 is.",
+                mesh.num_faces(),
+                requested
+            );
+        }
         decimate::DecimateOutcome::BackedOff => {
             eprintln!(
                 "warning: the requested {} faces produced a non-manifold mesh, so a milder \

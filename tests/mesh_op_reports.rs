@@ -110,12 +110,10 @@ fn catmull_clark_reports_declining_a_triangle_mesh() {
     );
 }
 
-/// QEM's back-off is the case worth reporting: when the requested target produces a
-/// non-manifold mesh it retries more mildly, so a caller asking to halve the mesh can be
-/// handed a quarter of the reduction. That was previously invisible.
-///
-/// The outcome varies with collapse order, so this asserts the report is *consistent*
-/// with the mesh rather than pinning which branch was taken.
+/// Whichever way decimation ends, the report and the mesh must agree. The interesting
+/// case is `Exhausted`: no remaining collapse is topologically safe, so it stops above the
+/// requested count — which is not a failure so much as an impossible request. `BackedOff`
+/// should no longer be reachable, but is still handled here rather than assumed away.
 #[test]
 fn decimation_reports_backing_off_or_refusing() {
     for name in ["sphere", "stanford-bunny", "torus"] {
@@ -150,6 +148,17 @@ fn decimation_reports_backing_off_or_refusing() {
                     mesh.num_faces(),
                     "{name}: refusing must leave the mesh untouched"
                 );
+            }
+            DecimateOutcome::Exhausted => {
+                assert!(
+                    m.num_faces() > report.faces_requested,
+                    "{name}: exhausting means it stopped above the target, not at it"
+                );
+                // It may have reduced nothing at all: `examples/cube.obj` is six
+                // disconnected quads whose only interior edges are the diagonals, and
+                // collapsing one of those deletes a whole patch, so every candidate is
+                // rejected and it exhausts at its input size.
+                assert!(m.num_faces() <= mesh.num_faces(), "{name}: gained faces");
             }
             DecimateOutcome::NothingRequested => {
                 assert_eq!(m.num_faces(), mesh.num_faces(), "{name}");
@@ -205,4 +214,80 @@ fn a_remesh_that_stops_early_says_how_far_it_got() {
         report.iterations_run
     );
     assert!(m.num_faces() > 0, "the mesh must still be usable");
+}
+
+/// **The back-off must stay unreachable.** `is_collapse_valid` forbids collapsing an
+/// interior edge whose endpoints both lie on the boundary — pinching two stretches of
+/// boundary together makes a bowtie — but the boundary flags it consulted were computed
+/// once and never updated. They go stale in the unsafe direction: collapsing an interior
+/// edge with one boundary endpoint leaves the survivor holding the other's boundary
+/// edges, so an interior vertex silently becomes a boundary vertex.
+///
+/// On the Stanford bunny, edge (331, 1352) had both endpoints on the boundary by the time
+/// it was considered, was recorded as `(false, false)`, and was allowed. The resulting
+/// bowtie made the whole result unrepresentable, so decimation fell back to a milder
+/// target and delivered 3725 faces where 2484 were asked for. With the flags kept
+/// current, every bundled mesh reaches its requested count.
+#[test]
+fn decimation_reaches_its_target_without_backing_off() {
+    for name in [
+        "sphere",
+        "torus",
+        "cylinder",
+        "spherical-cap",
+        "stanford-bunny",
+        "cube-closed",
+    ] {
+        let mesh = load(name);
+        for ratio in [0.5, 0.25] {
+            let mut m = mesh.clone();
+            let report = qem_decimate(&mut m, &DecimateOptions::with_target_ratio(ratio));
+
+            assert_ne!(
+                report.outcome,
+                DecimateOutcome::BackedOff,
+                "{name} at {ratio}: backed off to {} faces of a requested {}",
+                report.faces_after,
+                report.faces_requested
+            );
+            assert_ne!(
+                report.outcome,
+                DecimateOutcome::Refused,
+                "{name} at {ratio}"
+            );
+            assert_eq!(report.attempts, 1, "{name} at {ratio}: retried");
+            assert!(
+                m.num_faces() <= report.faces_requested,
+                "{name} at {ratio}: {} faces, wanted {}",
+                m.num_faces(),
+                report.faces_requested
+            );
+        }
+    }
+}
+
+/// The flags being stale was invisible from outside, so this pins the mechanism directly:
+/// after decimating, no interior edge may have both endpoints on the boundary *and* have
+/// been collapsible — equivalently, the result must be a mesh the half-edge
+/// representation accepts, on the first attempt, with no bowtie anywhere.
+#[test]
+fn decimation_leaves_no_bowtie_to_back_off_from() {
+    for name in ["stanford-bunny", "spherical-cap", "cylinder"] {
+        let mesh = load(name);
+        for ratio in [0.5, 0.3, 0.1] {
+            let mut m = mesh.clone();
+            let report = qem_decimate(&mut m, &DecimateOptions::with_target_ratio(ratio));
+            assert_eq!(
+                report.attempts, 1,
+                "{name} at {ratio}: needed {} attempts, so a collapse produced something \
+                 the mesh could not represent",
+                report.attempts
+            );
+            // Rebuilding from the result must succeed, which is exactly the check the
+            // back-off exists to satisfy.
+            let (vertices, faces) = morsel::mesh::to_face_vertex(&m);
+            morsel::mesh::build_from_triangles::<u32>(&vertices, &faces)
+                .unwrap_or_else(|e| panic!("{name} at {ratio}: result does not rebuild: {e}"));
+        }
+    }
 }

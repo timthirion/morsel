@@ -309,8 +309,17 @@ fn qem_decimate_internal<I: MeshIndex>(
     let mut attempts = 1;
     if let Some(new_mesh) = attempt(requested) {
         *mesh = new_mesh;
+        // Rebuilding is not the same as reaching the target. The loop stops when no
+        // remaining collapse is safe, which can leave the mesh above the requested count —
+        // sometimes because the request was impossible, as for a two-triangle mesh asked
+        // to become one.
+        let outcome = if mesh.num_faces() <= requested {
+            DecimateOutcome::Completed
+        } else {
+            DecimateOutcome::Exhausted
+        };
         return DecimateReport {
-            outcome: DecimateOutcome::Completed,
+            outcome,
             faces_before,
             faces_requested: requested,
             faces_after: mesh.num_faces(),
@@ -385,11 +394,25 @@ fn decimate_mesh(
 
     // Boundary vertices, needed by the bowtie rule in `is_collapse_valid`
     // regardless of `preserve_boundary`. An undirected edge with a single incident
-    // face is a boundary edge, and its endpoints are boundary vertices. Computed
-    // once: a legal collapse never moves a vertex onto or off the boundary, and
-    // treating a stale entry as still-boundary only over-rejects, which is the
-    // safe direction.
-    let on_boundary = {
+    // face is a boundary edge, and its endpoints are boundary vertices.
+    //
+    // This has to be kept current, and for a long time it was not. The claim was that a
+    // legal collapse never moves a vertex onto the boundary, so computing it once was
+    // enough — that is false, and in the unsafe direction. Collapsing an interior edge
+    // with one boundary endpoint leaves the survivor holding the other's boundary edges,
+    // so an interior vertex becomes a boundary vertex. Deleting the two faces of a
+    // collapsed edge can likewise leave a formerly interior edge with a single face,
+    // making its endpoints boundary vertices.
+    //
+    // With stale flags the rule below silently stopped applying. On the Stanford bunny,
+    // collapsing edge (331, 1352) — an interior edge whose endpoints were *both* on the
+    // boundary by then — was recorded as (false, false) and allowed, and produced a
+    // bowtie at 331. That single missed rejection is what the back-off was papering over.
+    //
+    // Updating is cheap because the flags only ever go from false to true: faces are
+    // deleted and never added, so an edge's live-face count only decreases, and a vertex
+    // can gain boundary status but never lose it.
+    let mut on_boundary = {
         let mut flags = vec![false; n_vertices];
         for (&(a, b), fs) in &edge_faces {
             if fs.len() == 1 {
@@ -574,6 +597,23 @@ fn decimate_mesh(
             .into_iter()
             .collect();
         neighbors.sort_unstable();
+
+        // Refresh boundary flags. Every face this collapse deleted was incident to
+        // `v_keep` or `v_remove`, and every edge of those faces is now incident to
+        // `v_keep`, so the vertices whose status can have changed are exactly `v_keep`
+        // and its current neighbours.
+        on_boundary[v_keep] |= on_boundary[v_remove];
+        for &neighbor in &neighbors {
+            let live = edge_faces
+                .get(&canonical_edge(v_keep, neighbor))
+                .map(|f| f.iter().filter(|&&fi| valid_faces[fi]).count())
+                .unwrap_or(0);
+            if live == 1 {
+                on_boundary[v_keep] = true;
+                on_boundary[neighbor] = true;
+            }
+        }
+
         for &neighbor in &neighbors {
             if !valid_vertices[neighbor] {
                 continue;

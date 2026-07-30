@@ -457,14 +457,35 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     // which came from `HashSet` iteration. `control_grid` produced four distinct meshes
     // in twelve runs. The ordering is total now, so these are exact.
     //
+    // The `Exhausted` entries below are new information, not new behaviour: decimation
+    // always stopped when it ran out of safe collapses, but "stopped short" used to be
+    // reported as success. Five are meshes with two faces asked to become one, which is
+    // not a thing a surface can be; `annulus_two_boundary_loops` runs out of interior
+    // edges at 20 of a requested 15; the two scale meshes stop one face above target.
+    //
+    // What is *not* here is any `BackedOff` entry. Until the boundary flags were kept
+    // current, `high_valence_fan` backed off in every run and the Stanford bunny stopped
+    // at 3725 faces of a requested 2484. Both now reach their target.
+    //
     // Only the two single-face meshes appear, and only because halving one face rounds to
     // a target of one — nothing is asked for, so nothing is done. Everything else now
     // reaches its requested target on every run, including `high_valence_fan`, which used
     // to back off in every run observed. A consistent tie-break turns out to find a
     // collapse sequence that succeeds where the arbitrary ones often did not, so this was
     // a correctness improvement as well as a reproducibility one.
+    ("all_obtuse", "decimate:qem", Outcome::Refused),
+    (
+        "annulus_two_boundary_loops",
+        "decimate:qem",
+        Outcome::Refused,
+    ),
+    ("huge_scale", "decimate:qem", Outcome::Refused),
     ("single_triangle", "decimate:qem", Outcome::Refused),
+    ("sliver_triangles", "decimate:qem", Outcome::Refused),
+    ("tiny_scale", "decimate:qem", Outcome::Refused),
+    ("two_components", "decimate:qem", Outcome::Refused),
     ("unreferenced_vertex", "decimate:qem", Outcome::Refused),
+    ("zero_area_face", "decimate:qem", Outcome::Refused),
 ];
 
 fn baseline() -> BTreeMap<(&'static str, &'static str), Outcome> {

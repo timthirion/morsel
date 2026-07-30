@@ -22,8 +22,8 @@
 //! let options = DecimateOptions::with_target_ratio(0.5);
 //! let report = qem_decimate(&mut mesh, &options);
 //!
-//! // Worth checking: a collapse sequence can end in a configuration the half-edge
-//! // mesh cannot represent, in which case a milder reduction is used instead.
+//! // Worth checking: the target is not always reachable. Most often no remaining
+//! // collapse is topologically safe, so decimation stops above the requested count.
 //! if !report.completed() {
 //!     eprintln!(
 //!         "wanted {} faces, got {} ({:?})",
@@ -51,23 +51,45 @@ pub enum DecimateOutcome {
     /// Nothing was asked for: an empty mesh, or a target at or above the current face
     /// count.
     NothingRequested,
+    /// Every remaining collapse would break the surface, so decimation stopped above the
+    /// requested target. The mesh is valid and as reduced as it can safely get.
+    ///
+    /// Usually this means the request was impossible rather than that anything failed: a
+    /// two-triangle mesh cannot become one triangle, and `annulus_two_boundary_loops` has
+    /// only so many interior edges to give. It also fires where a boundary constrains
+    /// things — an interior edge with both endpoints on the boundary can never be
+    /// collapsed, because pinching two stretches of boundary together makes a bowtie.
+    ///
+    /// The reduction achieved may be nothing at all: `examples/cube.obj` is six
+    /// disconnected quads whose only interior edges are the diagonals, and collapsing one
+    /// deletes a whole patch, so it exhausts at its input size of 12 faces.
+    Exhausted,
     /// The requested target produced a mesh the half-edge representation would not
     /// accept, and a milder reduction was used instead. The result is valid but coarser
     /// than asked for — ask for 50% and you may get 75%.
+    ///
+    /// This should now be unreachable in practice. It existed to paper over
+    /// `is_collapse_valid` missing a case, and the case it was missing — stale boundary
+    /// flags — is fixed. It is kept because the validity check is a topological argument,
+    /// not a proof, and silently emitting a corrupt mesh is the one outcome worth ruling
+    /// out unconditionally.
     BackedOff,
-    /// No reduction produced a valid mesh, so the input is untouched. This can be the
-    /// right answer: `examples/cube.obj` is six disconnected quads whose only interior
-    /// edges are the diagonals, and collapsing those deletes whole patches.
+    /// No attempted reduction produced a mesh that would rebuild, so the input is
+    /// untouched. Distinct from [`DecimateOutcome::Exhausted`], where the collapses that
+    /// *were* made are kept: this means even the back-off found nothing usable.
+    ///
+    /// Like `BackedOff`, this should no longer be reachable — a mesh that cannot be
+    /// reduced safely now exhausts instead, which is the same result described honestly.
+    /// `examples/cube.obj`, six disconnected quads whose only interior edges are the
+    /// diagonals, used to land here and now reports `Exhausted` at its input size.
     Refused,
 }
 
 /// What a decimation did.
 ///
-/// The back-off is the reason this exists. `is_collapse_valid` checks the link
-/// condition per collapse but is not airtight — on the Stanford bunny a sequence of
-/// individually legal collapses still produces a bowtie — so a rejected target is
-/// retried more mildly. That silently gave callers a different mesh than they asked
-/// for; now they can tell.
+/// Reaching the requested face count is not guaranteed, and the outcome says which of
+/// the several reasons applies. Most often it is [`DecimateOutcome::Exhausted`]: no
+/// remaining collapse is topologically safe, so the mesh stopped above the target.
 ///
 /// Whatever it reports is reproducible: the collapse order is deterministic, so the same
 /// input and options give the same mesh down to the bit, run after run. See

@@ -244,13 +244,19 @@ corners, leaving every face and every position exactly where it was. It is the s
 short slit on a sphere leaves a lot of distortion behind (LSCM's worst area ratio on
 the cut sphere is 8.1). Choosing seams to minimise distortion is a separate problem.
 
-Every command that mutates a mesh now says whether it actually did the work. These
-algorithms rebuild through `build_from_triangles`, and a rebuild it rejects leaves the
-mesh untouched — which used to pass in silence, so `decimate --ratio 0.5` on the bunny
-would hand back 3725 faces rather than the requested 2484 without a word, and
-Catmull-Clark would return a triangle mesh unchanged as though it had subdivided it.
-`RemeshReport`, `SubdivideReport` and `DecimateReport` are `#[must_use]`, so a library
-caller cannot ignore them by accident either.
+Every command that mutates a mesh says whether it actually did the work. These algorithms
+rebuild through `build_from_triangles`, and a rebuild it rejects leaves the mesh untouched
+— which used to pass in silence, so Catmull-Clark would return a triangle mesh unchanged
+as though it had subdivided it. `RemeshReport`, `SubdivideReport` and `DecimateReport` are
+`#[must_use]`, so a library caller cannot ignore them by accident either.
+
+`decimate` is deterministic and hits its target. It reaches the requested face count on
+every bundled mesh, on the first attempt, and gives byte-identical output for the same
+input. Both of those were recently untrue: the collapse order depended on hash iteration
+order, and a stale boundary flag let through one collapse that made the bunny's result
+unrepresentable, so it silently delivered 3725 faces where 2484 were asked for. When a
+target genuinely cannot be reached — a two-triangle mesh cannot become one triangle — it
+says so rather than reporting success.
 
 `remesh` reports triangle quality before and after, because that is the claim it is
 making. **Use `isotropic`** unless you have a reason not to — it is the only one of the
