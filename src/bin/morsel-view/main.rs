@@ -127,62 +127,11 @@ impl ApplicationHandler for App {
         // Initialize renderer
         let mut renderer = pollster::block_on(Renderer::new(window.clone()));
 
-        // Load mesh (and UVs if present in file)
-        log::info!("Loading mesh from: {}", self.mesh_path);
-        let (mesh, file_uvs): (HalfEdgeMesh, Option<UVMap>) =
-            obj::load_with_uvs(&self.mesh_path).expect("Failed to load mesh");
-        log::info!(
-            "Loaded mesh: {} vertices, {} faces",
-            mesh.num_vertices(),
-            mesh.num_faces()
-        );
-
-        // Use UVs from file, or compute them if requested
-        let uv_map: Option<UVMap> = if let Some(uvs) = file_uvs {
-            log::info!("Loaded UV coordinates from file");
-            Some(uvs)
-        } else if self.parameterize {
-            log::info!("Computing UV parameterization (cylindrical projection)...");
-            let uvs = cylindrical_projection(&mesh);
-            log::info!("UV parameterization complete");
-            Some(uvs)
-        } else {
-            None
-        };
-
-        // Compute vertex colors from curvature if requested
-        let vertex_colors: Option<VertexColors> = if let Some(curv_type) = self.curvature_type {
-            log::info!("Computing curvature...");
-            let curv_result = curvature::compute_curvature(&mesh);
-
-            let curvature_values: Vec<f64> = match curv_type {
-                CurvatureType::Mean => {
-                    log::info!("Using mean curvature");
-                    curv_result.mean_values().to_vec()
-                }
-                CurvatureType::Gaussian => {
-                    log::info!("Using Gaussian curvature");
-                    curv_result.gaussian_values().to_vec()
-                }
-            };
-
-            // Warn if there are NaN/Inf curvature values
-            let nan_count = curvature_values.iter().filter(|v| !v.is_finite()).count();
-            if nan_count > 0 {
-                eprintln!("WARNING: {} vertices have NaN/Inf curvature!", nan_count);
-            }
-
-            // Smooth curvature values to reduce noise
-            log::info!("Smoothing curvature values...");
-            let smoothed = smooth_vertex_values(&mesh, &curvature_values, 2);
-
-            log::info!("Computing vertex colors...");
-            let colors = curvature_to_vertex_colors(&smoothed);
-            log::info!("Vertex colors computed");
-            Some(colors)
-        } else {
-            None
-        };
+        let Prepared {
+            mesh,
+            uv_map,
+            vertex_colors,
+        } = prepare_mesh(&self.mesh_path, self.parameterize, self.curvature_type);
 
         // Create GPU mesh with optional UVs and vertex colors
         let gpu_mesh = GpuMesh::from_halfedge_mesh(
@@ -388,6 +337,13 @@ fn main() {
         eprintln!(
             "  --curvature <type>     Visualize curvature as vertex colors (mean or gaussian)"
         );
+        eprintln!("  --screenshot <file>    Render one frame to a PNG and exit (no window)");
+        eprintln!("  --size WxH             Screenshot size, default 1200x900");
+        eprintln!("  --azimuth <radians>    Camera azimuth for the screenshot, default 0.6");
+        eprintln!("  --elevation <radians>  Camera elevation for the screenshot, default 0.35");
+        eprintln!("  --wireframe            Draw the wireframe instead of solid shading");
+        eprintln!("  --distance <d>         Fixed camera distance; use the same value across a");
+        eprintln!("                         before/after pair so sizes stay comparable");
         eprintln!();
         eprintln!("Supported mesh formats: .obj, .stl, .ply, .gltf, .glb");
         eprintln!();
@@ -409,6 +365,12 @@ fn main() {
     let mut texture_path: Option<PathBuf> = None;
     let mut parameterize = false;
     let mut curvature_type: Option<CurvatureType> = None;
+    let mut screenshot: Option<PathBuf> = None;
+    let mut size = (1200u32, 900u32);
+    let mut azimuth = 0.6f32;
+    let mut elevation = 0.35f32;
+    let mut wireframe = false;
+    let mut distance: Option<f32> = None;
 
     let mut i = 2;
     while i < args.len() {
@@ -445,11 +407,84 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            "--screenshot" => {
+                if i + 1 < args.len() {
+                    screenshot = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("Error: --screenshot requires an output path");
+                    std::process::exit(1);
+                }
+            }
+            "--size" => {
+                let parsed = args.get(i + 1).and_then(|v| {
+                    let (w, h) = v.split_once('x')?;
+                    Some((w.parse().ok()?, h.parse().ok()?))
+                });
+                match parsed {
+                    Some(wh) => {
+                        size = wh;
+                        i += 2;
+                    }
+                    None => {
+                        eprintln!("Error: --size expects WIDTHxHEIGHT, e.g. 1200x900");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "--azimuth" | "--elevation" => {
+                let value = args.get(i + 1).and_then(|v| v.parse::<f32>().ok());
+                match value {
+                    Some(v) => {
+                        if args[i] == "--azimuth" {
+                            azimuth = v;
+                        } else {
+                            elevation = v;
+                        }
+                        i += 2;
+                    }
+                    None => {
+                        eprintln!("Error: {} expects an angle in radians", args[i]);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "--wireframe" => {
+                wireframe = true;
+                i += 1;
+            }
+            "--distance" => match args.get(i + 1).and_then(|v| v.parse::<f32>().ok()) {
+                Some(v) => {
+                    distance = Some(v);
+                    i += 2;
+                }
+                None => {
+                    eprintln!("Error: --distance expects a camera distance");
+                    std::process::exit(1);
+                }
+            },
             _ => {
                 eprintln!("Unknown option: {}", args[i]);
                 std::process::exit(1);
             }
         }
+    }
+
+    // Offscreen path: render one frame to a file and exit without opening a window.
+    if let Some(path) = screenshot {
+        render_to_file(
+            &mesh_path,
+            texture_path.as_deref(),
+            parameterize,
+            curvature_type,
+            &path,
+            size,
+            azimuth,
+            elevation,
+            wireframe,
+            distance,
+        );
+        return;
     }
 
     // Create event loop and run app
@@ -458,6 +493,166 @@ fn main() {
 
     let mut app = App::new(mesh_path, texture_path, parameterize, curvature_type);
     event_loop.run_app(&mut app).expect("Event loop error");
+}
+
+/// Render a single frame offscreen and write it out as a PNG.
+///
+/// Uses the same `Renderer` as the interactive viewer, so the image matches what
+/// the window would show. No event loop and no surface, which also means this runs
+/// without a display.
+#[allow(clippy::too_many_arguments)]
+fn render_to_file(
+    mesh_path: &str,
+    texture_path: Option<&std::path::Path>,
+    parameterize: bool,
+    curvature_type: Option<CurvatureType>,
+    output: &std::path::Path,
+    size: (u32, u32),
+    azimuth: f32,
+    elevation: f32,
+    wireframe: bool,
+    distance: Option<f32>,
+) {
+    let (width, height) = size;
+    let mut renderer = pollster::block_on(Renderer::new_offscreen(width, height));
+
+    let Prepared {
+        mesh,
+        uv_map,
+        vertex_colors,
+    } = prepare_mesh(mesh_path, parameterize, curvature_type);
+
+    let gpu_mesh = GpuMesh::from_halfedge_mesh(
+        renderer.device(),
+        &mesh,
+        uv_map.as_ref(),
+        vertex_colors.as_ref(),
+    );
+
+    let has_colors = vertex_colors.is_some();
+    if !has_colors {
+        if let Some(path) = texture_path {
+            if let Err(e) = renderer.load_texture(path) {
+                eprintln!("Failed to load texture: {e}");
+            }
+        }
+    }
+
+    // Frame the mesh, then swing the camera to the requested angle so successive
+    // figures can be given a consistent look.
+    //
+    // `--distance` overrides the automatic framing, which is essential for a
+    // before/after pair: auto-framing scales each mesh to fill the frame, so a
+    // shrunken result renders at the same apparent size as the original and the
+    // shrinkage becomes invisible. Pass the same distance to both to compare them.
+    let mut camera = OrbitCamera::default();
+    let dist = distance.unwrap_or(gpu_mesh.radius * 2.5);
+    camera.reset(gpu_mesh.center, dist);
+    camera.rotate(azimuth, elevation);
+    if distance.is_none() {
+        println!("auto camera distance: {dist:.4}");
+    }
+
+    renderer
+        .render(&gpu_mesh, &camera, wireframe, true, true, true)
+        .expect("offscreen render failed");
+
+    let pixels = renderer
+        .read_pixels()
+        .expect("an offscreen renderer should have pixels to read");
+
+    let image = image::RgbaImage::from_raw(width, height, pixels)
+        .expect("pixel buffer should match the requested size");
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    image
+        .save(output)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", output.display()));
+
+    println!(
+        "Wrote {} ({}x{}, {} vertices, {} faces)",
+        output.display(),
+        width,
+        height,
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
+}
+
+/// A mesh plus whatever per-vertex data was requested alongside it.
+struct Prepared {
+    mesh: HalfEdgeMesh,
+    uv_map: Option<UVMap>,
+    vertex_colors: Option<VertexColors>,
+}
+
+/// Load a mesh and derive UVs and vertex colours from the requested options.
+///
+/// Shared by the interactive path and `--screenshot`, so a rendered image shows
+/// exactly what the window would.
+fn prepare_mesh(
+    mesh_path: &str,
+    parameterize: bool,
+    curvature_type: Option<CurvatureType>,
+) -> Prepared {
+    log::info!("Loading mesh from: {}", mesh_path);
+    let (mesh, file_uvs): (HalfEdgeMesh, Option<UVMap>) =
+        obj::load_with_uvs(mesh_path).expect("Failed to load mesh");
+    log::info!(
+        "Loaded mesh: {} vertices, {} faces",
+        mesh.num_vertices(),
+        mesh.num_faces()
+    );
+
+    let uv_map: Option<UVMap> = if let Some(uvs) = file_uvs {
+        log::info!("Loaded UV coordinates from file");
+        Some(uvs)
+    } else if parameterize {
+        log::info!("Computing UV parameterization (cylindrical projection)...");
+        let uvs = cylindrical_projection(&mesh);
+        log::info!("UV parameterization complete");
+        Some(uvs)
+    } else {
+        None
+    };
+
+    let vertex_colors: Option<VertexColors> = if let Some(curv_type) = curvature_type {
+        log::info!("Computing curvature...");
+        let curv_result = curvature::compute_curvature(&mesh);
+
+        let curvature_values: Vec<f64> = match curv_type {
+            CurvatureType::Mean => {
+                log::info!("Using mean curvature");
+                curv_result.mean_values().to_vec()
+            }
+            CurvatureType::Gaussian => {
+                log::info!("Using Gaussian curvature");
+                curv_result.gaussian_values().to_vec()
+            }
+        };
+
+        let nan_count = curvature_values.iter().filter(|v| !v.is_finite()).count();
+        if nan_count > 0 {
+            eprintln!("WARNING: {} vertices have NaN/Inf curvature!", nan_count);
+        }
+
+        log::info!("Smoothing curvature values...");
+        let smoothed = smooth_vertex_values(&mesh, &curvature_values, 2);
+
+        log::info!("Computing vertex colors...");
+        let colors = curvature_to_vertex_colors(&smoothed);
+        log::info!("Vertex colors computed");
+        Some(colors)
+    } else {
+        None
+    };
+
+    Prepared {
+        mesh,
+        uv_map,
+        vertex_colors,
+    }
 }
 
 /// Convert curvature values to vertex colors using a blue-white-red colormap.

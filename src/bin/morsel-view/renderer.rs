@@ -25,7 +25,11 @@ struct Uniforms {
 
 /// The wgpu renderer for the mesh viewer.
 pub struct Renderer {
-    surface: wgpu::Surface<'static>,
+    /// Present target when driving a window. `None` when rendering offscreen.
+    surface: Option<wgpu::Surface<'static>>,
+    /// Colour target when rendering offscreen, along with the staging buffer used
+    /// to read it back. `None` when driving a window.
+    offscreen: Option<OffscreenTarget>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -50,6 +54,15 @@ pub struct Renderer {
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
     depth_texture: wgpu::TextureView,
+}
+
+/// A colour texture to render into, plus the buffer used to copy it back to the
+/// CPU. Rows in the staging buffer are padded to `COPY_BYTES_PER_ROW_ALIGNMENT`.
+struct OffscreenTarget {
+    texture: wgpu::Texture,
+    staging: wgpu::Buffer,
+    /// Padded bytes per row in `staging`, which is generally wider than `width * 4`.
+    padded_bytes_per_row: u32,
 }
 
 impl Renderer {
@@ -110,6 +123,22 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+
+        // Everything past this point is target-independent, so the windowed and
+        // offscreen paths share it.
+        let mut renderer = Self::from_device(device, queue, config);
+        renderer.surface = Some(surface);
+        renderer.size = size;
+        renderer
+    }
+
+    /// Build the pipelines and bind groups, leaving the render target unset.
+    fn from_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+    ) -> Self {
+        let size = winit::dpi::PhysicalSize::new(config.width, config.height);
 
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -747,7 +776,8 @@ impl Renderer {
         let depth_texture = Self::create_depth_texture(&device, &config);
 
         Self {
-            surface,
+            surface: None,
+            offscreen: None,
             device,
             queue,
             config,
@@ -783,7 +813,9 @@ impl Renderer {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(surface) = self.surface.as_ref() {
+                surface.configure(&self.device, &self.config);
+            }
             self.depth_texture = Self::create_depth_texture(&self.device, &self.config);
         }
     }
@@ -900,11 +932,21 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        // Get output texture
-        let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // Get output texture. A window renderer acquires the next swapchain image;
+        // an offscreen renderer draws straight into its own texture.
+        let surface_frame = match self.surface.as_ref() {
+            Some(surface) => Some(surface.get_current_texture()?),
+            None => None,
+        };
+        let view = match (&surface_frame, self.offscreen.as_ref()) {
+            (Some(frame), _) => frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+            (None, Some(target)) => target
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+            (None, None) => unreachable!("a renderer always has one target or the other"),
+        };
 
         // Create command encoder
         let mut encoder = self
@@ -1008,11 +1050,157 @@ impl Renderer {
             render_pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
         }
 
+        // An offscreen render has nothing to present, so copy the result into the
+        // staging buffer while the encoder is still open.
+        if let Some(target) = self.offscreen.as_ref() {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &target.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &target.staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(target.padded_bytes_per_row),
+                        rows_per_image: Some(self.config.height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        if let Some(frame) = surface_frame {
+            frame.present();
+        }
 
         Ok(())
+    }
+
+    /// Create a renderer that draws into its own texture, with no window.
+    ///
+    /// Reuses every pipeline and shader the windowed path uses, so a screenshot
+    /// looks like what the viewer shows rather than like a second renderer's
+    /// approximation of it.
+    pub async fn new_offscreen(width: u32, height: u32) -> Self {
+        let (width, height) = (width.max(1), height.max(1));
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        // No surface, so no surface to be compatible with.
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("Failed to find an appropriate adapter");
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: wgpu::Features::POLYGON_MODE_LINE,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
+            .await
+            .expect("Failed to create device");
+
+        // sRGB so shading matches the windowed path, which prefers an sRGB surface.
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Offscreen Colour"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        // Texture-to-buffer copies need each row aligned, so the staging buffer is
+        // generally wider than the image and has to be unpadded on read.
+        let unpadded = width * 4;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        // Round up to the alignment. Written out rather than via `div_ceil`, which
+        // is newer than this crate's declared MSRV.
+        let padded_bytes_per_row = ((unpadded + align - 1) / align) * align;
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Offscreen Readback"),
+            size: (padded_bytes_per_row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut renderer = Self::from_device(device, queue, config);
+        renderer.offscreen = Some(OffscreenTarget {
+            texture,
+            staging,
+            padded_bytes_per_row,
+        });
+        renderer
+    }
+
+    /// Read the last offscreen render back as tightly packed RGBA8 rows.
+    ///
+    /// Returns `None` for a windowed renderer, which has nothing to read.
+    pub fn read_pixels(&self) -> Option<Vec<u8>> {
+        let target = self.offscreen.as_ref()?;
+        let (width, height) = (self.config.width, self.config.height);
+
+        let slice = target.staging.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = sender.send(r);
+        });
+        self.device.poll(wgpu::Maintain::Wait);
+        receiver
+            .recv()
+            .expect("map_async never reported")
+            .expect("failed to map the readback buffer");
+
+        let padded = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let start = (row * target.padded_bytes_per_row) as usize;
+            pixels.extend_from_slice(&padded[start..start + (width * 4) as usize]);
+        }
+        drop(padded);
+        target.staging.unmap();
+
+        Some(pixels)
     }
 
     fn create_depth_texture(
