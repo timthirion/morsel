@@ -17,7 +17,7 @@ Mesh processing in Rust
 
 Every image below is produced by the CLI and the viewer in this repository, from the
 meshes in [`examples/`](examples/), with the commands shown. Regenerate any of them
-with `morsel-view … --screenshot`.
+with `morselview … --screenshot`.
 
 <p align="center">
   <img src="images/examples/torus-curvature.png" alt="Gaussian curvature on a torus" width="49%">
@@ -30,7 +30,7 @@ decorative: on this torus (`R = 1`, `r = 0.35`) the analytic curvature runs from
 within 1% of both, which `tests/curvature_analytic.rs` asserts.
 
 ```sh
-morsel-view examples/torus.obj --curvature gaussian --screenshot out.png
+morselview examples/torus.obj --curvature gaussian --screenshot out.png
 ```
 
 **Right — UV parameterization,** shown with a test grid texture. The ragged seam down
@@ -40,7 +40,7 @@ topology, which this mesh does not have — it has four boundary loops around th
 — so reaching them means cutting it open first, with `--cut`.
 
 ```sh
-morsel-view examples/stanford-bunny.obj --texture images/UV.png --screenshot out.png
+morselview examples/stanford-bunny.obj --texture images/UV.png --screenshot out.png
 ```
 
 ### Cutting a surface open to flatten it
@@ -75,7 +75,7 @@ anything to do with the seam.
 
 ```sh
 morsel parameterize examples/cylinder.obj cyl.obj --method lscm --cut --layout cyl-layout.obj
-morsel-view cyl-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.3 \
+morselview cyl-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.3 \
   --size 620x620 --screenshot out.png
 ```
 
@@ -94,7 +94,7 @@ the flattening is usable is a separate problem, tracked in
 
 ```sh
 morsel parameterize examples/stanford-bunny.obj bunny.obj --method lscm --cut --layout bunny-layout.obj
-morsel-view bunny-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.35 \
+morselview bunny-layout.obj --wireframe --azimuth 0 --elevation 0 --distance 1.35 \
   --size 620x620 --screenshot out.png
 ```
 
@@ -117,7 +117,7 @@ helices that follow no edge, Dijkstra overestimates by 15% on average and up to 
 which `tests/geodesic_analytic.rs` asserts against the exact unrolled answer.
 
 ```sh
-morsel-view examples/stanford-bunny.obj --geodesic 0 --screenshot out.png
+morselview examples/stanford-bunny.obj --geodesic 0 --screenshot out.png
 ```
 
 ### Smoothing: Laplacian shrinks, Taubin does not
@@ -137,7 +137,7 @@ weights exist to fix.
 
 ```sh
 morsel smooth examples/sphere.obj out.obj --method taubin --iterations 20
-morsel-view out.obj --screenshot out.png --distance 1.45
+morselview out.obj --screenshot out.png --distance 1.45
 ```
 
 ### Loop subdivision: 12 → 48 → 192 faces
@@ -155,7 +155,7 @@ the volume goes `1.000 → 0.476 → 0.397`, converging.
 
 ```sh
 morsel subdivide examples/cube-closed.obj out.obj --method loop --iterations 2
-morsel-view out.obj --screenshot out.png --distance 1.8 --wireframe
+morselview out.obj --screenshot out.png --distance 1.8 --wireframe
 ```
 
 ## Tools
@@ -283,17 +283,17 @@ Run `morsel <command> --help` for detailed options.
 
 ## Viewer
 
-`morsel-view` renders a mesh interactively, and will also render one frame straight
+`morselview` renders a mesh interactively, and will also render one frame straight
 to a PNG, which is how every image in the gallery above was produced.
 
 ```sh
 cargo build --release --features viewer
 
 # Interactive: drag to orbit, scroll to zoom, W wireframe, C vertex colours
-./target/release/morsel-view examples/torus.obj --curvature gaussian
+./target/release/morselview examples/torus.obj --curvature gaussian
 
 # Offscreen: no window, no display needed
-./target/release/morsel-view examples/torus.obj --curvature gaussian \
+./target/release/morselview examples/torus.obj --curvature gaussian \
     --screenshot out.png --size 880x620
 ```
 
@@ -317,7 +317,7 @@ distance to all three.
 
 ---
 
-### morsel-view
+### morselview
 
 A 3D mesh viewer for inspecting meshes with optional texture support.
 
@@ -328,8 +328,8 @@ cargo install --path . --features viewer
 
 **Usage:**
 ```bash
-morsel-view path/to/mesh.obj
-morsel-view mesh.obj --texture texture.png --parameterize
+morselview path/to/mesh.obj
+morselview mesh.obj --texture texture.png --parameterize
 ```
 
 **Options:**

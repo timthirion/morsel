@@ -57,8 +57,8 @@ path = "src/bin/morsel/main.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "morsel-view"
-path = "src/bin/morsel-view/main.rs"
+name = "morselview"
+path = "src/bin/morselview/main.rs"
 required-features = ["viewer"]
 
 [[bench]]

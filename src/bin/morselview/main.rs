@@ -1,6 +1,6 @@
 //! 3D mesh viewer binary for morsel.
 //!
-//! Usage: morsel-view <mesh_file> [--texture <texture_file>] [--parameterize] [--curvature <mean|gaussian>]
+//! Usage: morselview <mesh_file> [--texture <texture_file>] [--parameterize] [--curvature <mean|gaussian>]
 //!
 //! Controls:
 //! - Left mouse drag: Rotate camera
