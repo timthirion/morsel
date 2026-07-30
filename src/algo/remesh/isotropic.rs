@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::Point3;
 
+use crate::algo::remesh::RemeshReport;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
@@ -95,8 +96,11 @@ impl RemeshOptions {
 /// 2. **Edge collapsing**: Collapse edges shorter than 4/5 × target_length
 /// 3. **Edge flipping**: Flip edges to equalize vertex valence
 /// 4. **Tangential smoothing**: Smooth while preserving surface features
-pub fn isotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &RemeshOptions) {
-    isotropic_remesh_internal(mesh, options, None);
+pub fn isotropic_remesh<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &RemeshOptions,
+) -> RemeshReport {
+    isotropic_remesh_internal(mesh, options, None)
 }
 
 /// Performs isotropic remeshing with progress reporting.
@@ -106,17 +110,23 @@ pub fn isotropic_remesh_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &RemeshOptions,
     progress: &Progress,
-) {
-    isotropic_remesh_internal(mesh, options, Some(progress));
+) -> RemeshReport {
+    isotropic_remesh_internal(mesh, options, Some(progress))
 }
 
 fn isotropic_remesh_internal<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &RemeshOptions,
     progress: Option<&Progress>,
-) {
+) -> RemeshReport {
+    let faces_before = mesh.num_faces();
     if options.iterations == 0 || options.target_length <= 0.0 {
-        return;
+        return RemeshReport {
+            iterations_run: 0,
+            converged: false,
+            faces_before,
+            faces_after: faces_before,
+        };
     }
 
     let high = options.target_length * 4.0 / 3.0;
@@ -125,11 +135,14 @@ fn isotropic_remesh_internal<I: MeshIndex>(
     // 4 sub-steps per iteration for more granular progress
     let total_steps = options.iterations * 4;
 
+    let mut converged = true;
+    let mut iterations_run = 0;
     for iter in 0..options.iterations {
         let base_step = iter * 4;
+        iterations_run += 1;
 
         // Step 1: Split long edges (with sub-progress)
-        split_long_edges_with_progress(
+        converged &= split_long_edges_with_progress(
             mesh,
             high,
             options.preserve_boundary,
@@ -139,7 +152,7 @@ fn isotropic_remesh_internal<I: MeshIndex>(
         );
 
         // Step 2: Collapse short edges (with sub-progress)
-        collapse_short_edges_with_progress(
+        converged &= collapse_short_edges_with_progress(
             mesh,
             low,
             high,
@@ -160,25 +173,39 @@ fn isotropic_remesh_internal<I: MeshIndex>(
         if let Some(p) = progress {
             p.report(base_step + 2, total_steps, "Flipping edges");
         }
-        flip_edges_to_improve_valence(mesh, options.preserve_boundary);
+        converged &= flip_edges_to_improve_valence(mesh, options.preserve_boundary);
 
         // Step 4: Tangential smoothing
         if let Some(p) = progress {
             p.report(base_step + 3, total_steps, "Smoothing");
         }
         for _ in 0..options.smoothing_iterations {
-            tangential_smooth(
+            converged &= tangential_smooth(
                 mesh,
                 options.smoothing_lambda,
                 options.preserve_boundary,
                 options.parallel,
             );
         }
+
+        // Deliberately *not* stopping here. A rejected rebuild means this pass left the
+        // mesh alone; the mesh is still valid and later passes can still improve it.
+        // Breaking out measurably hurt: on the torus, stopping at the first rejected pass
+        // took the worst angle to 24.4° where running all five reaches 29.6°. Anisotropic
+        // does break, because its non-convergence is a pass bound being hit — evidence
+        // that iteration is diverging, not that one step was unlucky.
     }
 
     // Report completion
     if let Some(p) = progress {
         p.report(total_steps, total_steps, "Isotropic remeshing complete");
+    }
+
+    RemeshReport {
+        iterations_run,
+        converged,
+        faces_before,
+        faces_after: mesh.num_faces(),
     }
 }
 
@@ -208,6 +235,8 @@ pub fn average_edge_length<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> f64 {
 /// Split all edges longer than the threshold (with progress reporting).
 ///
 /// Uses batch processing: collect all long edges, split them simultaneously.
+/// Returns whether the pass ran to completion; `false` means the mesh it produced was
+/// rejected by [`build_from_triangles`], so the mesh is left as it was.
 fn split_long_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     threshold: f64,
@@ -215,7 +244,7 @@ fn split_long_edges_with_progress<I: MeshIndex>(
     progress: Option<&Progress>,
     step: usize,
     total_steps: usize,
-) {
+) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
     let threshold_sq = threshold * threshold;
 
@@ -400,18 +429,26 @@ fn split_long_edges_with_progress<I: MeshIndex>(
         vertices.len()
     );
 
-    if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
-        *mesh = new_mesh;
-    }
+    let built = match build_from_triangles::<I>(&vertices, &faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
+    };
 
     #[cfg(debug_assertions)]
     eprintln!("Split phase: mesh built");
+
+    built
 }
 
 /// Collapse all edges shorter than the threshold (with progress reporting).
 ///
 /// Uses batch processing: finds all collapsible edges, selects independent ones
 /// (no shared vertices), and collapses them all at once before rebuilding topology.
+/// Returns whether the pass ran to completion. See
+/// [`split_long_edges_with_progress`].
 fn collapse_short_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     low_threshold: f64,
@@ -420,7 +457,7 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
     progress: Option<&Progress>,
     step: usize,
     total_steps: usize,
-) {
+) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
 
     let max_iterations = 30; // Batches, not individual collapses
@@ -530,20 +567,24 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
         }
     }
 
-    if !clean_faces.is_empty() {
-        match build_from_triangles::<I>(&clean_vertices, &clean_faces) {
-            Ok(new_mesh) => {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "Collapse: mesh built successfully with {} halfedges",
-                    new_mesh.num_halfedges()
-                );
-                *mesh = new_mesh;
-            }
-            Err(_e) => {
-                #[cfg(debug_assertions)]
-                eprintln!("Collapse: ERROR building mesh: {:?}", _e);
-            }
+    if clean_faces.is_empty() {
+        // Collapsing consumed every face. Whatever that is, it is not a remeshed mesh.
+        return false;
+    }
+    match build_from_triangles::<I>(&clean_vertices, &clean_faces) {
+        Ok(new_mesh) => {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Collapse: mesh built successfully with {} halfedges",
+                new_mesh.num_halfedges()
+            );
+            *mesh = new_mesh;
+            true
+        }
+        Err(_e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("Collapse: ERROR building mesh: {:?}", _e);
+            false
         }
     }
 }
@@ -647,20 +688,27 @@ fn can_collapse_edge_fast(
 }
 
 /// Flip edges to improve vertex valence.
+///
+/// Returns whether the pass ran to completion. See
+/// [`split_long_edges_with_progress`].
 fn flip_edges_to_improve_valence<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     preserve_boundary: bool,
-) {
+) -> bool {
     let (vertices, mut faces) = to_face_vertex(mesh);
 
     flip_edges_for_valence_faces(&vertices, &mut faces, preserve_boundary);
 
     if !validate_face_list(&vertices, &faces) {
-        return;
+        return false;
     }
 
-    if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
-        *mesh = new_mesh;
+    match build_from_triangles::<I>(&vertices, &faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -684,7 +732,7 @@ mod tests {
             + mesh.num_faces() as i32;
 
         let options = RemeshOptions::with_target_length(0.5).with_iterations(2);
-        isotropic_remesh(&mut mesh, &options);
+        let _ = isotropic_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
 
@@ -700,7 +748,7 @@ mod tests {
 
         let target = original_avg * 0.5;
         let options = RemeshOptions::with_target_length(target).with_iterations(3);
-        isotropic_remesh(&mut mesh, &options);
+        let _ = isotropic_remesh(&mut mesh, &options);
 
         let new_avg = average_edge_length(&mesh);
 
@@ -718,7 +766,7 @@ mod tests {
         let original_face_count = mesh.num_faces();
 
         let options = RemeshOptions::with_target_length(0.5).with_iterations(0);
-        isotropic_remesh(&mut mesh, &options);
+        let _ = isotropic_remesh(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_face_count);
         for (vid, orig) in mesh.vertex_ids().zip(original_vertices.iter()) {

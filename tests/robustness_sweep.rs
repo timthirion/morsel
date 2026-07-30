@@ -102,6 +102,23 @@ fn check_mesh(mesh: &HalfEdgeMesh) -> std::result::Result<(), String> {
     }
 }
 
+/// Turn an algorithm's own report of stopping short into a `Refused` outcome.
+///
+/// Before these algorithms returned reports, a rejected rebuild left the mesh untouched
+/// and told nobody, so the sweep recorded `ok` — structurally valid, because it was the
+/// *input*. This is what makes that case visible: it is a legitimate response to bad
+/// input, but it must not read as success.
+fn declined<F>(stopped_short: bool, why: F) -> std::result::Result<(), String>
+where
+    F: FnOnce() -> String,
+{
+    if stopped_short {
+        Err(why())
+    } else {
+        Ok(())
+    }
+}
+
 fn check_field(values: &[f64], label: &str) -> std::result::Result<(), String> {
     match field_defect(values, label) {
         Some(d) => Err(format!("broken: {d}")),
@@ -143,22 +160,43 @@ fn algorithms() -> Vec<Probe> {
                 // A quad scheme; it should decline a triangle mesh rather than
                 // index past the end of its per-face data, which is what it used
                 // to do.
-                subdivide::catmull_clark_subdivide(&mut m, &subdivide::SubdivideOptions::new(1));
-                check_mesh(&m)
+                let report = subdivide::catmull_clark_subdivide(
+                    &mut m,
+                    &subdivide::SubdivideOptions::new(1),
+                );
+                check_mesh(&m)?;
+                declined(
+                    report.outcome != subdivide::SubdivideOutcome::Completed,
+                    || format!("{:?}", report.outcome),
+                )
             })
         }),
         ("subdivide:loop", |m| {
             run(|| {
                 let mut m = m.clone();
-                subdivide::loop_subdivide(&mut m, &subdivide::SubdivideOptions::new(1));
-                check_mesh(&m)
+                let report =
+                    subdivide::loop_subdivide(&mut m, &subdivide::SubdivideOptions::new(1));
+                check_mesh(&m)?;
+                declined(
+                    report.outcome != subdivide::SubdivideOutcome::Completed,
+                    || format!("{:?}", report.outcome),
+                )
             })
         }),
         ("decimate:qem", |m| {
             run(|| {
                 let mut m = m.clone();
-                decimate::qem_decimate(&mut m, &decimate::DecimateOptions::with_target_ratio(0.5));
-                check_mesh(&m)
+                let report = decimate::qem_decimate(
+                    &mut m,
+                    &decimate::DecimateOptions::with_target_ratio(0.5),
+                );
+                check_mesh(&m)?;
+                declined(!report.completed(), || {
+                    format!(
+                        "{:?} after {} attempt(s): {} faces, wanted {}",
+                        report.outcome, report.attempts, report.faces_after, report.faces_requested
+                    )
+                })
             })
         }),
         ("remesh:isotropic", |m| {
@@ -167,11 +205,14 @@ fn algorithms() -> Vec<Probe> {
                 // Target the mesh's own average edge length so the request is
                 // scale-appropriate rather than arbitrary.
                 let target = remesh::average_edge_length(&m);
-                remesh::isotropic_remesh(
+                let report = remesh::isotropic_remesh(
                     &mut m,
                     &remesh::RemeshOptions::with_target_length(target),
                 );
-                check_mesh(&m)
+                check_mesh(&m)?;
+                declined(!report.converged, || {
+                    format!("stopped after {} iteration(s)", report.iterations_run)
+                })
             })
         }),
         ("remesh:anisotropic", |m| {
@@ -185,13 +226,9 @@ fn algorithms() -> Vec<Probe> {
                     &remesh::AnisotropicOptions::new(0.5 * target, 2.0 * target),
                 );
                 check_mesh(&m)?;
-                if !report.converged {
-                    return Err(format!(
-                        "did not converge, stopped after {} iteration(s)",
-                        report.iterations_run
-                    ));
-                }
-                Ok(())
+                declined(!report.converged, || {
+                    format!("stopped after {} iteration(s)", report.iterations_run)
+                })
             })
         }),
         ("remesh:cvt", |m| {
@@ -200,14 +237,17 @@ fn algorithms() -> Vec<Probe> {
                 // Two thirds of the input count: at or above it every Voronoi cell holds
                 // one vertex and Lloyd's iteration is a no-op by construction.
                 let target = (m.num_vertices() * 2 / 3).max(3);
-                remesh::cvt_remesh(
+                let report = remesh::cvt_remesh(
                     &mut m,
                     &remesh::CvtOptions {
                         target_vertices: Some(target),
                         ..Default::default()
                     },
                 );
-                check_mesh(&m)
+                check_mesh(&m)?;
+                declined(!report.converged, || {
+                    "retriangulated dual was rejected; mesh unchanged".to_string()
+                })
             })
         }),
         ("curvature:gaussian", |m| {
@@ -327,7 +367,8 @@ fn with_quiet_panics<T>(f: impl FnOnce() -> T) -> T {
 /// collapse sequence is now rejected rather than accepted.
 const BORN_BROKEN: &[&str] = &[];
 
-/// Pairs whose outcome varies between runs of the same binary.
+/// Pairs whose outcome varies between runs of the same binary. For an algorithm that is
+/// order-dependent on *every* mesh, use `ORDER_DEPENDENT` instead.
 ///
 /// **Empty since July 2026.** QEM decimation was order-dependent — 3 failures in
 /// 8 runs on `control_grid`, identically with `parallel` true and false, because
@@ -338,6 +379,23 @@ const BORN_BROKEN: &[&str] = &[];
 /// rejected at rebuild. Measured 0 corruptions in 12 runs across four meshes that
 /// previously failed.
 const NONDETERMINISTIC: &[(&str, &str)] = &[];
+
+/// Algorithms whose *outcome* depends on iteration order, so no per-mesh result is
+/// pinned for them. `Panicked` and `Corrupted` are still failures — only the
+/// `Ok`/`Refused` distinction is treated as unpinnable.
+///
+/// QEM decimation is the only one. It was already known to be order-dependent, but that
+/// used to be invisible: the back-off silently delivered a milder reduction and the
+/// sweep saw a valid mesh either way. Now that it reports, the same pair reads `Ok` on
+/// some runs and `Refused` on others. Over ten runs of one binary, two drifted, on a
+/// different mesh each time — `control_grid` in one and `cocircular_lattice` in the
+/// other, both "wanted 16 faces, got 24 after 2 attempts". Enumerating the flaky pairs
+/// is a losing game; four turned up before this replaced them.
+///
+/// The real fix is a deterministic collapse order — the sequence comes from `HashMap`
+/// iteration — which would let this column be pinned exactly again. Recorded in
+/// `plans/0002-research-program.md`.
+const ORDER_DEPENDENT: &[&str] = &["decimate:qem"];
 
 /// Recorded per-algorithm behaviour on inputs that *were* valid. Anything absent
 /// is expected to be `Ok`.
@@ -375,6 +433,44 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     // `tiny_scale` and `zero_area_face` used to refuse the heat method too. Both
     // now succeed: the failure was its Poisson solve running out of CG budget, not
     // anything about the geometry.
+    //
+    // Everything below became visible in July 2026, when the mutating algorithms
+    // started returning reports instead of discarding the result of their rebuild.
+    // These entries are not new *behaviour* — the algorithms already did nothing on
+    // these inputs — they are newly *reported*. Recording `ok` for them was the sweep
+    // repeating the library's own false claim: the mesh came back structurally valid
+    // because it came back untouched.
+    //
+    // Catmull-Clark is a quad scheme and the whole corpus is triangles, so it declines
+    // every one of them. This was thirteen `ok` cells for an algorithm that had never
+    // once run.
+    ("all_obtuse", "subdivide:cc", Outcome::Refused),
+    (
+        "annulus_two_boundary_loops",
+        "subdivide:cc",
+        Outcome::Refused,
+    ),
+    ("cocircular_lattice", "subdivide:cc", Outcome::Refused),
+    ("control_grid", "subdivide:cc", Outcome::Refused),
+    ("control_tetrahedron", "subdivide:cc", Outcome::Refused),
+    ("high_valence_fan", "subdivide:cc", Outcome::Refused),
+    ("huge_scale", "subdivide:cc", Outcome::Refused),
+    ("single_triangle", "subdivide:cc", Outcome::Refused),
+    ("sliver_triangles", "subdivide:cc", Outcome::Refused),
+    ("tiny_scale", "subdivide:cc", Outcome::Refused),
+    ("two_components", "subdivide:cc", Outcome::Refused),
+    ("unreferenced_vertex", "subdivide:cc", Outcome::Refused),
+    ("zero_area_face", "subdivide:cc", Outcome::Refused),
+    // CVT's retriangulation builds a dual over the relaxed seeds, and that dual is not
+    // manifold for every seed placement. When it is rejected the input comes back
+    // unchanged, which used to be indistinguishable from "already optimal".
+    ("sliver_triangles", "remesh:cvt", Outcome::Refused),
+    ("two_components", "remesh:cvt", Outcome::Refused),
+    ("unreferenced_vertex", "remesh:cvt", Outcome::Refused),
+    // QEM has no entries here: see `ORDER_DEPENDENT`. Its back-off is worth knowing
+    // about even unpinned — `high_valence_fan` asks for 32 faces and gets 62 after five
+    // attempts, so a caller asking to halve the mesh is quietly handed a quarter of the
+    // reduction. The caller is told now, even though the sweep cannot pin it.
 ];
 
 fn baseline() -> BTreeMap<(&'static str, &'static str), Outcome> {
@@ -526,10 +622,18 @@ fn robustness_matrix_matches_baseline() {
         if *outcome == Outcome::Inherited {
             continue;
         }
-        // Known order-dependent pairs may land either way within one run.
+        // Known order-dependent pairs may land either way within one run. `Refused` is
+        // in the exempt set because that is the shape the flakiness now takes: QEM's
+        // back-off either finds a target that rebuilds or does not, depending on collapse
+        // order. `Panicked` is deliberately not exempt — nothing excuses a panic.
         if NONDETERMINISTIC.contains(&(*mesh, *algo))
             && matches!(outcome, Outcome::Ok | Outcome::Corrupted)
         {
+            continue;
+        }
+        // Order-dependent algorithms: whether they succeed or decline varies per run, so
+        // only `Panicked` and `Corrupted` are pinned for them.
+        if ORDER_DEPENDENT.contains(algo) && matches!(outcome, Outcome::Ok | Outcome::Refused) {
             continue;
         }
         let want = expected

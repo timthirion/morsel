@@ -96,11 +96,19 @@ use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex}
 
 /// What a remeshing pass did.
 ///
-/// `converged` is the part worth checking. These remeshers iterate split/collapse
-/// passes until nothing changes, and that is not guaranteed to happen: see the note in
-/// `split_long_edges_anisotropic`. A pass that hits its bound, or produces a mesh the
-/// half-edge representation will not accept, leaves the mesh in the last good state it
-/// reached and reports `converged: false` rather than claiming success.
+/// `converged` is the part worth checking. It means **every pass ran to completion**,
+/// not that a numerical quantity settled. A pass fails to complete in one of two ways:
+/// it hits its iteration bound (see the note in `split_long_edges_anisotropic`, where
+/// splitting can add one vertex per pass without end), or it produces a mesh the
+/// half-edge representation will not accept and so leaves the mesh untouched.
+///
+/// The two are treated differently on purpose. Anisotropic stops at the first
+/// non-completing pass, because a bound being hit is evidence the iteration is
+/// diverging. Isotropic runs every requested iteration regardless, because a rejected
+/// rebuild leaves a *valid* mesh that later passes still improve — making it stop
+/// instead took the torus's worst angle from 29.6° down to 24.4°. So
+/// `converged: false` with `iterations_run == requested` is a real and meaningful
+/// combination: it means some pass was rejected, not that the loop was cut short.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "a remesh may not have converged; check the report"]
 pub struct RemeshReport {
@@ -876,12 +884,16 @@ pub(crate) fn flip_edge(faces: &mut [[usize; 3]], v0: usize, v1: usize) -> bool 
 // ============================================================================
 
 /// Apply tangential smoothing to regularize vertex positions.
+///
+/// Returns whether the pass ran to completion. Only positions change here, so the
+/// rebuild is rejected only if the connectivity was already unrepresentable — but
+/// reporting it costs nothing and keeps the caller's convergence flag honest.
 pub(crate) fn tangential_smooth<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     lambda: f64,
     preserve_boundary: bool,
     parallel: bool,
-) {
+) -> bool {
     let (vertices, faces) = to_face_vertex(mesh);
 
     let normals = compute_vertex_normals_from_faces(&vertices, &faces, parallel);
@@ -921,8 +933,12 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
         (0..vertices.len()).map(compute_position).collect()
     };
 
-    if let Ok(new_mesh) = build_from_triangles::<I>(&new_positions, &faces) {
-        *mesh = new_mesh;
+    match build_from_triangles::<I>(&new_positions, &faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 

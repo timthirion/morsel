@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
-use super::SubdivideOptions;
+use super::{SubdivideOptions, SubdivideOutcome, SubdivideReport};
 
 /// Performs Loop subdivision on a triangle mesh.
 ///
@@ -34,14 +34,11 @@ use super::SubdivideOptions;
 /// - **Boundary edge vertex**: `1/2 * (v0 + v1)`
 /// - **Interior vertex**: `(1 - n*β) * v + β * Σ(neighbors)`
 /// - **Boundary vertex**: `1/8 * (left + right) + 3/4 * v`
-pub fn loop_subdivide<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &SubdivideOptions) {
-    if options.iterations == 0 {
-        return;
-    }
-
-    for _ in 0..options.iterations {
-        loop_subdivide_once(mesh, options.preserve_boundary, options.parallel);
-    }
+pub fn loop_subdivide<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+) -> SubdivideReport {
+    subdivide_levels(mesh, options, None)
 }
 
 /// Loop subdivision with progress reporting.
@@ -49,28 +46,63 @@ pub fn loop_subdivide_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SubdivideOptions,
     progress: &Progress,
-) {
+) -> SubdivideReport {
+    subdivide_levels(mesh, options, Some(progress))
+}
+
+/// Run the requested levels, stopping at the first one the mesh representation rejects.
+fn subdivide_levels<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+    progress: Option<&Progress>,
+) -> SubdivideReport {
+    let faces_before = mesh.num_faces();
     if options.iterations == 0 {
-        return;
+        return SubdivideReport {
+            iterations_run: 0,
+            outcome: SubdivideOutcome::NothingRequested,
+            faces_before,
+            faces_after: faces_before,
+        };
     }
 
+    let mut iterations_run = 0;
+    let mut outcome = SubdivideOutcome::Completed;
     for iter in 0..options.iterations {
-        progress.report(iter, options.iterations, "Loop subdivision");
-        loop_subdivide_once(mesh, options.preserve_boundary, options.parallel);
+        if let Some(p) = progress {
+            p.report(iter, options.iterations, "Loop subdivision");
+        }
+        if !loop_subdivide_once(mesh, options.preserve_boundary, options.parallel) {
+            outcome = SubdivideOutcome::RebuildRejected;
+            break;
+        }
+        iterations_run += 1;
     }
-    progress.report(options.iterations, options.iterations, "Loop subdivision");
+    if let Some(p) = progress {
+        p.report(options.iterations, options.iterations, "Loop subdivision");
+    }
+
+    SubdivideReport {
+        iterations_run,
+        outcome,
+        faces_before,
+        faces_after: mesh.num_faces(),
+    }
 }
 
 /// Perform one iteration of Loop subdivision.
+///
+/// Returns whether the subdivided mesh was accepted; `false` leaves `mesh` untouched.
 fn loop_subdivide_once<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     preserve_boundary: bool,
     parallel: bool,
-) {
+) -> bool {
     let (vertices, faces) = to_face_vertex(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
-        return;
+        // Nothing to subdivide, and nothing went wrong either.
+        return true;
     }
 
     // Build edge information (sequential - builds HashMap)
@@ -92,9 +124,14 @@ fn loop_subdivide_once<I: MeshIndex>(
         parallel,
     );
 
-    // Rebuild the half-edge mesh
-    if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &new_faces) {
-        *mesh = new_mesh;
+    // Rebuild the half-edge mesh. A rejection is reported rather than swallowed: the
+    // caller would otherwise see an unchanged mesh and no indication why.
+    match build_from_triangles::<I>(&new_vertices, &new_faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -398,7 +435,7 @@ mod tests {
         let mut mesh = create_single_triangle();
 
         let options = SubdivideOptions::new(1);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         // 1 triangle -> 4 triangles
         assert_eq!(mesh.num_faces(), 4);
@@ -413,7 +450,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = SubdivideOptions::new(1);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         // Each face becomes 4 faces
         assert_eq!(mesh.num_faces(), original_faces * 4);
@@ -426,7 +463,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = SubdivideOptions::new(2);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         // Each iteration quadruples: 4 * 4 = 16x
         assert_eq!(mesh.num_faces(), original_faces * 16);
@@ -440,7 +477,7 @@ mod tests {
             + mesh.num_faces() as i32;
 
         let options = SubdivideOptions::new(1);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
             + mesh.num_faces() as i32;
@@ -458,7 +495,7 @@ mod tests {
         let original_vertices = mesh.num_vertices();
 
         let options = SubdivideOptions::new(0);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_faces);
         assert_eq!(mesh.num_vertices(), original_vertices);
@@ -469,7 +506,7 @@ mod tests {
         let mut mesh = create_two_triangles();
 
         let options = SubdivideOptions::new(1);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         // 2 triangles -> 8 triangles
         assert_eq!(mesh.num_faces(), 8);
@@ -504,7 +541,7 @@ mod tests {
             / original_positions.len() as f64;
 
         let options = SubdivideOptions::new(2);
-        loop_subdivide(&mut mesh, &options);
+        let _ = loop_subdivide(&mut mesh, &options);
 
         // Compute new centroid
         let new_positions: Vec<Point3<f64>> =

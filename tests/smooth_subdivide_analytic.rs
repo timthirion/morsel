@@ -176,7 +176,7 @@ fn loop_subdivision_preserves_topology_and_converges() {
         let mut volumes = vec![volume(&mesh)];
 
         for step in 1..=3 {
-            loop_subdivide(&mut mesh, &SubdivideOptions::new(1));
+            let _ = loop_subdivide(&mut mesh, &SubdivideOptions::new(1));
 
             assert_eq!(
                 euler_characteristic(&mesh),
@@ -228,7 +228,7 @@ fn catmull_clark_requires_a_quad_mesh() {
     assert!(!base.is_quad_mesh(), "fixture should be triangles");
 
     let mut mesh = base.clone();
-    catmull_clark_subdivide(&mut mesh, &SubdivideOptions::new(1));
+    let _ = catmull_clark_subdivide(&mut mesh, &SubdivideOptions::new(1));
 
     assert_eq!(
         mesh.num_vertices(),

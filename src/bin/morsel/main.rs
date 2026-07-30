@@ -642,7 +642,8 @@ fn cmd_subdivide(
                 "Applying Loop subdivision ({} iterations, {})...",
                 iterations, mode
             );
-            subdivide::loop_subdivide_with_progress(&mut mesh, &options, &progress);
+            let report = subdivide::loop_subdivide_with_progress(&mut mesh, &options, &progress);
+            warn_if_subdivision_stopped_early(&report, iterations);
         }
         SubdivideMethod::CatmullClark => {
             // A quad scheme. Say so rather than silently returning the input.
@@ -657,7 +658,9 @@ fn cmd_subdivide(
                 "Applying Catmull-Clark subdivision ({} iterations, {})...",
                 iterations, mode
             );
-            subdivide::catmull_clark_subdivide_with_progress(&mut mesh, &options, &progress);
+            let report =
+                subdivide::catmull_clark_subdivide_with_progress(&mut mesh, &options, &progress);
+            warn_if_subdivision_stopped_early(&report, iterations);
         }
     }
     let elapsed = start.elapsed();
@@ -708,7 +711,7 @@ fn cmd_decimate(
     let requested = faces.unwrap_or_else(|| ((faces_before as f64) * ratio).round() as usize);
 
     let start = Instant::now();
-    decimate::qem_decimate_with_progress(&mut mesh, &options, &progress);
+    let report = decimate::qem_decimate_with_progress(&mut mesh, &options, &progress);
     let elapsed = start.elapsed();
 
     println!(
@@ -717,19 +720,28 @@ fn cmd_decimate(
         mesh.num_faces()
     );
 
-    // Decimation has no error channel and stops short when no remaining collapse
-    // is topologically safe, or when the collapsed result would not rebuild into a
-    // valid mesh. Say so rather than letting the shortfall pass unmentioned.
-    if mesh.num_faces() > requested {
-        eprintln!(
-            "warning: reached {} faces, not the requested {} ({} of {} collapsed). \
-             Remaining edges either fail the link condition or would produce a \
-             non-manifold mesh; the un-decimated mesh is kept in that case.",
-            mesh.num_faces(),
-            requested,
-            faces_before - mesh.num_faces(),
-            faces_before - requested
-        );
+    // The report names which case this was, rather than the shortfall being inferred
+    // from the face count and every cause described as if it might apply.
+    match report.outcome {
+        decimate::DecimateOutcome::Completed | decimate::DecimateOutcome::NothingRequested => {}
+        decimate::DecimateOutcome::BackedOff => {
+            eprintln!(
+                "warning: the requested {} faces produced a non-manifold mesh, so a milder \
+                 reduction to {} was used instead ({} attempts). Individually legal \
+                 collapses can still combine into a bowtie vertex.",
+                requested,
+                mesh.num_faces(),
+                report.attempts
+            );
+        }
+        decimate::DecimateOutcome::Refused => {
+            eprintln!(
+                "warning: no reduction toward {} faces produced a valid mesh after {} \
+                 attempts, so the input is unchanged at {} faces. Remaining edges either \
+                 fail the link condition or would produce a non-manifold mesh.",
+                requested, report.attempts, faces_before
+            );
+        }
     }
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
@@ -873,7 +885,8 @@ fn cmd_remesh(
             let options = remesh::RemeshOptions::with_target_length(target)
                 .with_iterations(iterations)
                 .with_parallel(!sequential);
-            remesh::isotropic_remesh_with_progress(&mut mesh, &options, &progress);
+            let report = remesh::isotropic_remesh_with_progress(&mut mesh, &options, &progress);
+            warn_if_remesh_stopped_early(&report, iterations, "isotropic");
         }
         RemeshMethod::Anisotropic => {
             println!(
@@ -883,14 +896,7 @@ fn cmd_remesh(
             let options = remesh::AnisotropicOptions::new(0.5 * target, 2.0 * target)
                 .with_iterations(iterations);
             let report = remesh::anisotropic_remesh_with_progress(&mut mesh, &options, &progress);
-            if !report.converged {
-                eprintln!(
-                    "warning: anisotropic remeshing stopped after {} of {iterations} \
-                     iteration(s) without converging. The mesh is the last state it \
-                     reached, not a finished result.",
-                    report.iterations_run
-                );
-            }
+            warn_if_remesh_stopped_early(&report, iterations, "anisotropic");
         }
         RemeshMethod::Cvt => {
             let vertices = target_vertices.unwrap_or_else(|| mesh.num_vertices() * 2 / 3);
@@ -912,7 +918,14 @@ fn cmd_remesh(
                 iterations,
                 ..Default::default()
             };
-            remesh::cvt_remesh_with_progress(&mut mesh, &options, &progress);
+            let report = remesh::cvt_remesh_with_progress(&mut mesh, &options, &progress);
+            if !report.converged {
+                eprintln!(
+                    "warning: CVT retriangulation produced a mesh that is not manifold, so \
+                     the input is unchanged. Its dual over the relaxed seeds is not valid \
+                     for every seed placement; try a different --target-vertices."
+                );
+            }
         }
     }
     let elapsed = start.elapsed();
@@ -947,6 +960,50 @@ fn cmd_remesh(
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
     Ok(())
+}
+
+/// Say when a remesh stopped short. These algorithms rebuild the mesh from a face list
+/// each pass, and a rebuild the half-edge representation rejects leaves the mesh at the
+/// last state that worked — which looks exactly like success from the outside.
+fn warn_if_remesh_stopped_early(report: &remesh::RemeshReport, requested: usize, label: &str) {
+    if report.converged {
+        return;
+    }
+    // Isotropic runs every iteration even when a pass is rejected, since the mesh stays
+    // valid and later passes still help; anisotropic stops, because its non-convergence
+    // means a pass bound was hit. So both "ran fewer" and "ran all, some rejected" are
+    // real, and saying "stopped after 5 of 5" for the second would be nonsense.
+    if report.iterations_run < requested {
+        eprintln!(
+            "warning: {label} remeshing stopped after {} of {requested} iteration(s). The \
+             mesh is the last state it reached, not a finished result.",
+            report.iterations_run
+        );
+    } else {
+        eprintln!(
+            "warning: {label} remeshing ran all {requested} iteration(s) but at least one \
+             pass was rejected as non-manifold and left the mesh unchanged, so the result \
+             is less refined than requested."
+        );
+    }
+}
+
+/// Say when subdivision stopped short, and why.
+fn warn_if_subdivision_stopped_early(report: &subdivide::SubdivideReport, requested: usize) {
+    match report.outcome {
+        subdivide::SubdivideOutcome::Completed | subdivide::SubdivideOutcome::NothingRequested => {}
+        subdivide::SubdivideOutcome::NotAQuadMesh => {
+            eprintln!("warning: Catmull-Clark needs an all-quad mesh; the input is unchanged.");
+        }
+        subdivide::SubdivideOutcome::RebuildRejected => {
+            eprintln!(
+                "warning: subdivision level {} produced a mesh that is not manifold, so it \
+                 stopped after {} of {requested} level(s).",
+                report.iterations_run + 1,
+                report.iterations_run
+            );
+        }
+    }
 }
 
 fn cmd_quality(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {

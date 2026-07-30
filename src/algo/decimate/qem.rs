@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
-use super::DecimateOptions;
+use super::{DecimateOptions, DecimateOutcome, DecimateReport};
 
 /// A quadric error matrix (4x4 symmetric matrix).
 ///
@@ -221,8 +221,11 @@ impl Ord for EdgeCandidate {
 /// its 24 vertices on a boundary; the only interior edges are the quad diagonals,
 /// and collapsing those deletes whole patches. It previously "decimated" 12 faces
 /// to 6 by destroying three of the six.
-pub fn qem_decimate<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &DecimateOptions) {
-    qem_decimate_internal(mesh, options, None);
+pub fn qem_decimate<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &DecimateOptions,
+) -> DecimateReport {
+    qem_decimate_internal(mesh, options, None)
 }
 
 /// QEM decimation with progress reporting.
@@ -230,25 +233,38 @@ pub fn qem_decimate_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &DecimateOptions,
     progress: &Progress,
-) {
-    qem_decimate_internal(mesh, options, Some(progress));
+) -> DecimateReport {
+    qem_decimate_internal(mesh, options, Some(progress))
 }
 
 fn qem_decimate_internal<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &DecimateOptions,
     progress: Option<&Progress>,
-) {
+) -> DecimateReport {
     let (vertices, faces) = to_face_vertex(mesh);
+    let faces_before = mesh.num_faces();
 
     if vertices.is_empty() || faces.is_empty() {
-        return;
+        return DecimateReport {
+            outcome: DecimateOutcome::NothingRequested,
+            faces_before,
+            faces_requested: faces_before,
+            faces_after: faces_before,
+            attempts: 0,
+        };
     }
 
     let original_faces = faces.len();
     let requested = options.compute_target(original_faces);
     if requested >= original_faces {
-        return;
+        return DecimateReport {
+            outcome: DecimateOutcome::NothingRequested,
+            faces_before,
+            faces_requested: requested,
+            faces_after: faces_before,
+            attempts: 0,
+        };
     }
 
     // Attempt one reduction, returning the rebuilt mesh only if the collapsed
@@ -274,9 +290,16 @@ fn qem_decimate_internal<I: MeshIndex>(
         build_from_triangles::<I>(&new_vertices, &new_faces).ok()
     };
 
+    let mut attempts = 1;
     if let Some(new_mesh) = attempt(requested) {
         *mesh = new_mesh;
-        return;
+        return DecimateReport {
+            outcome: DecimateOutcome::Completed,
+            faces_before,
+            faces_requested: requested,
+            faces_after: mesh.num_faces(),
+            attempts,
+        };
     }
 
     // Halve the requested reduction until something rebuilds. Geometric back-off
@@ -290,14 +313,28 @@ fn qem_decimate_internal<I: MeshIndex>(
         if reduction == 0 {
             break;
         }
+        attempts += 1;
         if let Some(new_mesh) = attempt(original_faces - reduction) {
             *mesh = new_mesh;
-            return;
+            return DecimateReport {
+                outcome: DecimateOutcome::BackedOff,
+                faces_before,
+                faces_requested: requested,
+                faces_after: mesh.num_faces(),
+                attempts,
+            };
         }
     }
 
     // Nothing reduced safely; leave the caller's mesh untouched rather than
-    // replacing it with a broken one.
+    // replacing it with a broken one, and say so.
+    DecimateReport {
+        outcome: DecimateOutcome::Refused,
+        faces_before,
+        faces_requested: requested,
+        faces_after: faces_before,
+        attempts,
+    }
 }
 
 /// Main decimation algorithm on face-vertex representation.
@@ -1069,7 +1106,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = DecimateOptions::with_target_ratio(0.5);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         assert!(mesh.num_faces() < original_faces);
         assert!(mesh.is_valid());
@@ -1081,7 +1118,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = DecimateOptions::with_target_faces(6);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         // Should reduce faces (closed mesh is more reliable)
         assert!(mesh.num_faces() <= original_faces);
@@ -1093,7 +1130,7 @@ mod tests {
         let mut mesh = create_octahedron();
 
         let options = DecimateOptions::with_target_ratio(0.6);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         assert!(mesh.is_valid());
     }
@@ -1105,7 +1142,7 @@ mod tests {
         let original_vertices = mesh.num_vertices();
 
         let options = DecimateOptions::with_target_ratio(1.0);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_faces);
         assert_eq!(mesh.num_vertices(), original_vertices);
@@ -1118,7 +1155,7 @@ mod tests {
 
         // Use a moderate ratio on smaller grid for reliable results
         let options = DecimateOptions::with_target_ratio(0.7);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         assert!(mesh.num_faces() < original_faces);
         assert!(mesh.is_valid());
@@ -1131,7 +1168,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = DecimateOptions::with_target_ratio(0.5);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         // Should reduce faces
         assert!(mesh.num_faces() <= original_faces);
@@ -1144,7 +1181,7 @@ mod tests {
 
         // Very low max error should prevent most collapses
         let options = DecimateOptions::with_target_ratio(0.1).with_max_error(1e-10);
-        qem_decimate(&mut mesh, &options);
+        let _ = qem_decimate(&mut mesh, &options);
 
         // Mesh should still be valid even if target wasn't reached
         assert!(mesh.is_valid());

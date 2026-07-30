@@ -244,6 +244,14 @@ corners, leaving every face and every position exactly where it was. It is the s
 short slit on a sphere leaves a lot of distortion behind (LSCM's worst area ratio on
 the cut sphere is 8.1). Choosing seams to minimise distortion is a separate problem.
 
+Every command that mutates a mesh now says whether it actually did the work. These
+algorithms rebuild through `build_from_triangles`, and a rebuild it rejects leaves the
+mesh untouched — which used to pass in silence, so `decimate --ratio 0.5` on the bunny
+would hand back 3725 faces rather than the requested 2484 without a word, and
+Catmull-Clark would return a triangle mesh unchanged as though it had subdivided it.
+`RemeshReport`, `SubdivideReport` and `DecimateReport` are `#[must_use]`, so a library
+caller cannot ignore them by accident either.
+
 `remesh` reports triangle quality before and after, because that is the claim it is
 making. **Use `isotropic`** unless you have a reason not to — it is the only one of the
 three that reliably improves quality, and `tests/remesh_quality.rs` measures all of

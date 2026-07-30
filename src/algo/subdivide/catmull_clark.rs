@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use crate::algo::Progress;
 use crate::mesh::{build_from_quads, to_face_vertex_quads, HalfEdgeMesh, MeshIndex};
 
-use super::SubdivideOptions;
+use super::{SubdivideOptions, SubdivideOutcome, SubdivideReport};
 
 /// Performs Catmull-Clark subdivision on a quad mesh.
 ///
@@ -49,23 +49,8 @@ use super::SubdivideOptions;
 pub fn catmull_clark_subdivide<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SubdivideOptions,
-) {
-    if options.iterations == 0 {
-        return;
-    }
-
-    // Catmull-Clark is a quad scheme, and the implementation below indexes
-    // per-face data assuming four corners. Handed a triangle mesh it read past the
-    // end and panicked with the invalid-index sentinel. There is no error channel
-    // here, so leave the caller's mesh untouched instead; the CLI checks up front
-    // and reports it properly.
-    if !mesh.is_quad_mesh() {
-        return;
-    }
-
-    for _ in 0..options.iterations {
-        catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
-    }
+) -> SubdivideReport {
+    subdivide_levels(mesh, options, None)
 }
 
 /// Catmull-Clark subdivision with progress reporting.
@@ -73,24 +58,62 @@ pub fn catmull_clark_subdivide_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &SubdivideOptions,
     progress: &Progress,
-) {
-    if !mesh.is_quad_mesh() {
-        return;
-    }
+) -> SubdivideReport {
+    subdivide_levels(mesh, options, Some(progress))
+}
+
+/// Run the requested levels, stopping at the first one the mesh representation rejects.
+fn subdivide_levels<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &SubdivideOptions,
+    progress: Option<&Progress>,
+) -> SubdivideReport {
+    let faces_before = mesh.num_faces();
+    let stop = |outcome| SubdivideReport {
+        iterations_run: 0,
+        outcome,
+        faces_before,
+        faces_after: faces_before,
+    };
 
     if options.iterations == 0 {
-        return;
+        return stop(SubdivideOutcome::NothingRequested);
     }
 
-    for iter in 0..options.iterations {
-        progress.report(iter, options.iterations, "Catmull-Clark subdivision");
-        catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel);
+    // Catmull-Clark is a quad scheme, and the implementation below indexes per-face data
+    // assuming four corners. Handed a triangle mesh it read past the end and panicked
+    // with the invalid-index sentinel, so it declines — and now says so, rather than
+    // being indistinguishable from a mesh that subdivided into itself.
+    if !mesh.is_quad_mesh() {
+        return stop(SubdivideOutcome::NotAQuadMesh);
     }
-    progress.report(
-        options.iterations,
-        options.iterations,
-        "Catmull-Clark subdivision",
-    );
+
+    let mut iterations_run = 0;
+    let mut outcome = SubdivideOutcome::Completed;
+    for iter in 0..options.iterations {
+        if let Some(p) = progress {
+            p.report(iter, options.iterations, "Catmull-Clark subdivision");
+        }
+        if !catmull_clark_subdivide_once(mesh, options.preserve_boundary, options.parallel) {
+            outcome = SubdivideOutcome::RebuildRejected;
+            break;
+        }
+        iterations_run += 1;
+    }
+    if let Some(p) = progress {
+        p.report(
+            options.iterations,
+            options.iterations,
+            "Catmull-Clark subdivision",
+        );
+    }
+
+    SubdivideReport {
+        iterations_run,
+        outcome,
+        faces_before,
+        faces_after: mesh.num_faces(),
+    }
 }
 
 /// Perform one iteration of Catmull-Clark subdivision.
@@ -98,11 +121,12 @@ fn catmull_clark_subdivide_once<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     preserve_boundary: bool,
     parallel: bool,
-) {
+) -> bool {
     let (vertices, faces) = to_face_vertex_quads(mesh);
 
     if vertices.is_empty() || faces.is_empty() {
-        return;
+        // Nothing to subdivide, and nothing went wrong either.
+        return true;
     }
 
     // Step 1: Compute face points (centroids) - parallel
@@ -155,8 +179,13 @@ fn catmull_clark_subdivide_once<I: MeshIndex>(
     );
 
     // Rebuild the half-edge mesh
-    if let Ok(new_mesh) = build_from_quads::<I>(&new_vertices, &new_faces) {
-        *mesh = new_mesh;
+    // A rejection is reported rather than swallowed; see `subdivide_levels`.
+    match build_from_quads::<I>(&new_vertices, &new_faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -452,7 +481,7 @@ mod tests {
         let mut mesh = create_single_quad();
 
         let options = SubdivideOptions::new(1);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         // 1 quad -> 4 quads
         assert_eq!(mesh.num_faces(), 4);
@@ -467,7 +496,7 @@ mod tests {
         let mut mesh = create_two_quads();
 
         let options = SubdivideOptions::new(1);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         // 2 quads -> 8 quads
         assert_eq!(mesh.num_faces(), 8);
@@ -483,7 +512,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = SubdivideOptions::new(1);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         // Each face becomes 4 faces
         assert_eq!(mesh.num_faces(), original_faces * 4);
@@ -497,7 +526,7 @@ mod tests {
         let original_faces = mesh.num_faces();
 
         let options = SubdivideOptions::new(2);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         // Each iteration quadruples: 4 * 4 = 16x
         assert_eq!(mesh.num_faces(), original_faces * 16);
@@ -512,7 +541,7 @@ mod tests {
             + mesh.num_faces() as i32;
 
         let options = SubdivideOptions::new(1);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
             + mesh.num_faces() as i32;
@@ -530,7 +559,7 @@ mod tests {
         let original_vertices = mesh.num_vertices();
 
         let options = SubdivideOptions::new(0);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_faces);
         assert_eq!(mesh.num_vertices(), original_vertices);
@@ -551,7 +580,7 @@ mod tests {
             / original_positions.len() as f64;
 
         let options = SubdivideOptions::new(2);
-        catmull_clark_subdivide(&mut mesh, &options);
+        let _ = catmull_clark_subdivide(&mut mesh, &options);
 
         // Compute new centroid
         let new_positions: Vec<Point3<f64>> =

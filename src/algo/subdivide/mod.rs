@@ -53,6 +53,48 @@ mod loop_subdivision;
 pub use catmull_clark::{catmull_clark_subdivide, catmull_clark_subdivide_with_progress};
 pub use loop_subdivision::{loop_subdivide, loop_subdivide_with_progress};
 
+/// How a subdivision ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubdivideOutcome {
+    /// Every requested level ran.
+    Completed,
+    /// Nothing was asked for: zero iterations.
+    NothingRequested,
+    /// Catmull-Clark was handed a mesh that is not all quads. It is a quad scheme and
+    /// its per-face data assumes four corners, so it declines rather than reading past
+    /// the end — which is what it used to do, panicking on the invalid-index sentinel.
+    NotAQuadMesh,
+    /// A level produced a mesh the half-edge representation will not accept: a repeated
+    /// directed edge, an edge with three faces, or a bowtie vertex. The mesh is left at
+    /// the last level that did succeed.
+    RebuildRejected,
+}
+
+/// What a subdivision did.
+///
+/// Worth checking rather than ignoring: subdivision rebuilds the mesh from a face list,
+/// and a rejected rebuild leaves the mesh at whatever level last worked. Before this
+/// reported anything, that was indistinguishable from success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "subdivision can stop early; check the report"]
+pub struct SubdivideReport {
+    /// Levels that actually ran.
+    pub iterations_run: usize,
+    /// How it ended.
+    pub outcome: SubdivideOutcome,
+    /// Face count before.
+    pub faces_before: usize,
+    /// Face count after.
+    pub faces_after: usize,
+}
+
+impl SubdivideReport {
+    /// Whether every requested level ran.
+    pub fn completed(&self) -> bool {
+        self.outcome == SubdivideOutcome::Completed
+    }
+}
+
 /// Options for subdivision algorithms.
 #[derive(Debug, Clone)]
 pub struct SubdivideOptions {

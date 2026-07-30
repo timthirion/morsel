@@ -370,15 +370,45 @@ compare numerically. Cheap to design in now, painful to retrofit.
         35.9° → 51.4° and mean radius ratio 0.74 → 0.95, its best aggregate result
         of the five meshes — with a worst angle of `5.5e-8°`. The single strongest
         argument for reporting worst and mean side by side.
-- [ ] **Eight sites still discard a rebuild error**, each one able to report success
-      having done nothing: `if let Ok(new_mesh) = build_from_triangles(…)` with no
-      `else`, in isotropic (2), cvt (2), remesh/mod (1), loop subdivision (1),
-      Catmull-Clark (1), and QEM (1, via `.ok()`, where the decimation back-off does
-      handle it). This hole only became reachable when `build_from_triangles` started
-      validating — before that these calls returned a corrupt mesh instead, which is
-      worse. Three more in anisotropic are fixed. The remedy is the one used there:
-      return a report and let the caller see it. `RemeshReport` in
-      `src/algo/remesh/mod.rs` is the shape to reuse.
+- [x] **Every discarded rebuild error is now reported** (July 2026). Nine sites, not
+      eight — the isotropic collapse pass `match`ed on the result but only logged it
+      under `debug_assertions`. Each could report success having done nothing, and the
+      hole only became reachable when `build_from_triangles` started validating; before
+      that the same calls returned a corrupt mesh, which is worse.
+
+      Every mutating entry point now returns a `#[must_use]` report:
+      `RemeshReport` (isotropic, anisotropic, cvt), `SubdivideReport` with a
+      `SubdivideOutcome` naming *why* (`NotAQuadMesh`, `RebuildRejected`,
+      `NothingRequested`), and `DecimateReport` with a `DecimateOutcome`
+      (`BackedOff`, `Refused`). The CLI surfaces all of them.
+
+      What the reports immediately exposed:
+
+      - **Catmull-Clark had thirteen `ok` cells in the sweep for an algorithm that had
+        never once run.** The corpus is all triangles and it is a quad scheme, so it
+        declined every mesh — and returning the input unchanged read as success.
+      - **QEM silently delivers less reduction than asked.** Halving the Stanford bunny
+        requests 2484 faces and produces 3725 after two back-off attempts. The back-off
+        was deliberate and documented; that the caller was never told was not.
+      - **Isotropic remeshing has rejected passes on the torus and the bunny.** It runs
+        all five iterations, but at least one pass produces a mesh the half-edge
+        representation refuses, so that pass silently does nothing.
+      - **CVT's retriangulated dual is rejected on three corpus meshes**, leaving the
+        input untouched — previously indistinguishable from "already optimal".
+
+      One lesson worth keeping: reporting a failure is not licence to change behaviour
+      on it. Making isotropic `break` on a rejected pass took the torus's worst angle
+      from 29.6° down to 24.4°, because a rejected pass leaves a *valid* mesh that later
+      passes still improve. Anisotropic does break, because its non-convergence means a
+      pass bound was hit — divergence, not one unlucky step. My own quality test caught
+      the regression.
+- [ ] **Make QEM decimation deterministic.** Its collapse order comes from `HashMap`
+      iteration, so whether the back-off fires varies per run: over ten runs of one
+      sweep binary, two drifted, on a different mesh each time. The sweep now exempts
+      the whole `decimate:qem` column from per-mesh pinning (`ORDER_DEPENDENT` in
+      `tests/robustness_sweep.rs`) rather than enumerate flaky pairs — four turned up
+      before that replaced them. A sorted or BTreeMap-based collapse order would let the
+      column be pinned exactly again.
 - [ ] Expose `geodesic` in the CLI. The CVT and anisotropic remeshers are exposed
       now (`morsel remesh --method cvt|anisotropic`) and covered by the sweep.
 

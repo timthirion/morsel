@@ -34,6 +34,53 @@ mod qem;
 
 pub use qem::{qem_decimate, qem_decimate_with_progress};
 
+/// How a decimation ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimateOutcome {
+    /// The requested target was reached.
+    Completed,
+    /// Nothing was asked for: an empty mesh, or a target at or above the current face
+    /// count.
+    NothingRequested,
+    /// The requested target produced a mesh the half-edge representation would not
+    /// accept, and a milder reduction was used instead. The result is valid but coarser
+    /// than asked for — ask for 50% and you may get 75%.
+    BackedOff,
+    /// No reduction produced a valid mesh, so the input is untouched. This can be the
+    /// right answer: `examples/cube.obj` is six disconnected quads whose only interior
+    /// edges are the diagonals, and collapsing those deletes whole patches.
+    Refused,
+}
+
+/// What a decimation did.
+///
+/// The back-off is the reason this exists. `is_collapse_valid` checks the link
+/// condition per collapse but is not airtight — on the Stanford bunny a sequence of
+/// individually legal collapses still produces a bowtie — so a rejected target is
+/// retried more mildly. That silently gave callers a different mesh than they asked
+/// for; now they can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "decimation can back off or refuse; check the report"]
+pub struct DecimateReport {
+    /// How it ended.
+    pub outcome: DecimateOutcome,
+    /// Face count before.
+    pub faces_before: usize,
+    /// Face count the options asked for.
+    pub faces_requested: usize,
+    /// Face count after.
+    pub faces_after: usize,
+    /// Targets tried, including the first. More than one means the back-off ran.
+    pub attempts: usize,
+}
+
+impl DecimateReport {
+    /// Whether the requested target was reached.
+    pub fn completed(&self) -> bool {
+        self.outcome == DecimateOutcome::Completed
+    }
+}
+
 /// Options for mesh decimation.
 #[derive(Debug, Clone)]
 pub struct DecimateOptions {

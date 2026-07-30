@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::remesh::RemeshReport;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
@@ -81,8 +82,8 @@ impl CvtOptions {
 ///
 /// This algorithm optimizes vertex positions by iteratively moving each vertex
 /// to the centroid of its Voronoi cell on the mesh surface.
-pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions) {
-    cvt_remesh_internal(mesh, options, None);
+pub fn cvt_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &CvtOptions) -> RemeshReport {
+    cvt_remesh_internal(mesh, options, None)
 }
 
 /// Performs CVT-based remeshing with progress reporting.
@@ -92,22 +93,30 @@ pub fn cvt_remesh_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &CvtOptions,
     progress: &Progress,
-) {
-    cvt_remesh_internal(mesh, options, Some(progress));
+) -> RemeshReport {
+    cvt_remesh_internal(mesh, options, Some(progress))
 }
 
 fn cvt_remesh_internal<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &CvtOptions,
     progress: Option<&Progress>,
-) {
+) -> RemeshReport {
+    let faces_before = mesh.num_faces();
+    let unchanged = |iterations_run| RemeshReport {
+        iterations_run,
+        converged: false,
+        faces_before,
+        faces_after: faces_before,
+    };
+
     if options.iterations == 0 {
-        return;
+        return unchanged(0);
     }
 
     let (vertices, faces) = to_face_vertex(mesh);
     if vertices.is_empty() || faces.is_empty() {
-        return;
+        return unchanged(0);
     }
 
     let target_count = options.target_vertices.unwrap_or(vertices.len());
@@ -124,10 +133,12 @@ fn cvt_remesh_internal<I: MeshIndex>(
         HashSet::new()
     };
 
+    let mut iterations_run = 0;
     for iter in 0..options.iterations {
         if let Some(p) = progress {
             p.report(iter, options.iterations, "CVT remeshing (Lloyd iteration)");
         }
+        iterations_run += 1;
 
         let assignments = assign_to_nearest_seeds(&vertices, &seeds);
         let centroids = compute_voronoi_centroids(&vertices, &faces, &seeds, &assignments);
@@ -153,6 +164,13 @@ fn cvt_remesh_internal<I: MeshIndex>(
         }
     }
 
+    // Whether the mesh was actually replaced. The retriangulation below builds a dual
+    // over the relaxed seeds, and that dual is not manifold for every seed placement —
+    // when it is not, the rebuild is rejected and the input is returned untouched. That
+    // used to happen in silence, which is indistinguishable from "the input was already
+    // optimal".
+    let mut rebuilt = false;
+
     if options.retriangulate {
         let projected_seeds = project_points_to_surface(&vertices, &faces, &seeds);
 
@@ -164,6 +182,7 @@ fn cvt_remesh_internal<I: MeshIndex>(
         ) {
             if let Ok(new_mesh) = build_from_triangles::<I>(&new_verts, &new_faces) {
                 *mesh = new_mesh;
+                rebuilt = true;
             }
         }
     } else {
@@ -177,6 +196,7 @@ fn cvt_remesh_internal<I: MeshIndex>(
 
         if let Ok(new_mesh) = build_from_triangles::<I>(&new_vertices, &faces) {
             *mesh = new_mesh;
+            rebuilt = true;
         }
     }
 
@@ -187,6 +207,13 @@ fn cvt_remesh_internal<I: MeshIndex>(
             options.iterations,
             "CVT remeshing complete",
         );
+    }
+
+    RemeshReport {
+        iterations_run,
+        converged: rebuilt,
+        faces_before,
+        faces_after: mesh.num_faces(),
     }
 }
 
@@ -644,7 +671,7 @@ mod tests {
         let mut mesh = create_tetrahedron();
 
         let options = CvtOptions::new(3).with_retriangulate(true);
-        cvt_remesh(&mut mesh, &options);
+        let _ = cvt_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
         assert!(mesh.num_faces() > 0);
@@ -657,7 +684,7 @@ mod tests {
         let original_face_count = mesh.num_faces();
 
         let options = CvtOptions::new(3).with_retriangulate(false);
-        cvt_remesh(&mut mesh, &options);
+        let _ = cvt_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
         assert_eq!(mesh.num_faces(), original_face_count);
@@ -671,7 +698,7 @@ mod tests {
         let original_face_count = mesh.num_faces();
 
         let options = CvtOptions::new(0);
-        cvt_remesh(&mut mesh, &options);
+        let _ = cvt_remesh(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_face_count);
         for (vid, orig) in mesh.vertex_ids().zip(original_vertices.iter()) {
@@ -688,7 +715,7 @@ mod tests {
         let options = CvtOptions::new(5)
             .with_target_vertices(8)
             .with_retriangulate(true);
-        cvt_remesh(&mut mesh, &options);
+        let _ = cvt_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
         assert!(mesh.num_vertices() <= original_count);

@@ -35,7 +35,7 @@ fn isotropic_remeshing_improves_aggregate_quality() {
 
         let mut after_mesh = mesh.clone();
         let target = average_edge_length(&mesh);
-        isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
+        let _ = isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
         let after = quality(&after_mesh);
 
         assert!(
@@ -69,7 +69,7 @@ fn isotropic_remeshing_improves_the_worst_triangle_on_smooth_meshes() {
 
         let mut after_mesh = mesh.clone();
         let target = average_edge_length(&mesh);
-        isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
+        let _ = isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
         let after = quality(&after_mesh);
 
         assert!(
@@ -101,7 +101,7 @@ fn isotropic_remeshing_emits_a_degenerate_face_on_the_bunny() {
 
     let mut after_mesh = mesh.clone();
     let target = average_edge_length(&mesh);
-    isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
+    let _ = isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
     let after = quality(&after_mesh);
 
     assert!(
@@ -128,7 +128,7 @@ fn isotropic_remeshing_leaves_an_already_uniform_mesh_alone() {
 
     let mut after_mesh = mesh.clone();
     let target = average_edge_length(&mesh);
-    isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
+    let _ = isotropic_remesh(&mut after_mesh, &RemeshOptions::with_target_length(target));
     let after = quality(&after_mesh);
 
     // Not bit-identical: the mesh makes a round trip through face-vertex arrays and
@@ -226,7 +226,7 @@ fn cvt_remeshing_needs_a_target_below_the_vertex_count() {
     let before = quality(&mesh);
 
     let mut defaulted = mesh.clone();
-    cvt_remesh(&mut defaulted, &CvtOptions::default());
+    let _ = cvt_remesh(&mut defaulted, &CvtOptions::default());
     let after_default = quality(&defaulted);
     assert_eq!(
         after_default.num_faces, before.num_faces,
@@ -241,7 +241,7 @@ fn cvt_remeshing_needs_a_target_below_the_vertex_count() {
 
     let mut resampled = mesh.clone();
     let target = mesh.num_vertices() * 2 / 3;
-    cvt_remesh(
+    let _ = cvt_remesh(
         &mut resampled,
         &CvtOptions {
             target_vertices: Some(target),
@@ -284,11 +284,11 @@ fn remeshing_drifts_off_a_sphere_of_known_radius() {
     let target = average_edge_length(&mesh);
 
     let mut iso = mesh.clone();
-    isotropic_remesh(&mut iso, &RemeshOptions::with_target_length(target));
+    let _ = isotropic_remesh(&mut iso, &RemeshOptions::with_target_length(target));
     let iso_drift = drift(&iso);
 
     let mut cvt = mesh.clone();
-    cvt_remesh(
+    let _ = cvt_remesh(
         &mut cvt,
         &CvtOptions {
             target_vertices: Some(120),
