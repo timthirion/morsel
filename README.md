@@ -43,6 +43,28 @@ base.
 morsel-view examples/stanford-bunny.obj --texture images/UV.png --screenshot out.png
 ```
 
+### Geodesic distance
+
+<p align="center">
+  <img src="images/examples/bunny-geodesic.png" alt="Geodesic distance from a source vertex on the Stanford bunny, shown with isolines" width="66%">
+</p>
+
+Distance from a single source vertex on the bunny's head, by the heat method — two
+linear solves rather than a graph search, so distance is measured *across* faces
+rather than along edges. The bands are the readable part: evenly spaced rings mean
+the field really is a distance, and they would bunch or kink where it is not.
+
+`--geodesic-dijkstra` colours by graph distance instead. On this mesh the two look
+nearly identical, because the bunny is triangulated finely enough that edges
+approximate geodesics well — so there is deliberately no side-by-side here. The gap
+opens on coarser or more structured meshes: on `cylinder.obj`, whose geodesics are
+helices that follow no edge, Dijkstra overestimates by 15% on average and up to 41%,
+which `tests/geodesic_analytic.rs` asserts against the exact unrolled answer.
+
+```sh
+morsel-view examples/stanford-bunny.obj --geodesic 0 --screenshot out.png
+```
+
 ### Smoothing: Laplacian shrinks, Taubin does not
 
 <p align="center">
@@ -174,6 +196,8 @@ cargo build --release --features viewer
 | Option | Effect |
 |--------|--------|
 | `--curvature mean\|gaussian` | Colour vertices by curvature |
+| `--geodesic <vertex>` | Colour by geodesic distance from a source, with isolines |
+| `--geodesic-dijkstra` | Use graph distance instead of the heat method |
 | `--texture <file>` | Apply a texture, using UVs from the mesh |
 | `--parameterize` | Compute cylindrical UVs first |
 | `--screenshot <file>` | Render one frame to PNG and exit |

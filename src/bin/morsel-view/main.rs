@@ -55,6 +55,8 @@ struct App {
     parameterize: bool,
     /// Optional curvature type to visualize.
     curvature_type: Option<CurvatureType>,
+    /// `(source vertex, use Dijkstra instead of the heat method)`.
+    geodesic: Option<(usize, bool)>,
     /// The window (created after resume).
     window: Option<Arc<Window>>,
     /// The renderer (created after window).
@@ -83,6 +85,7 @@ impl App {
         texture_path: Option<PathBuf>,
         parameterize: bool,
         curvature_type: Option<CurvatureType>,
+        geodesic: Option<(usize, bool)>,
     ) -> Self {
         // Disable backface culling by default for curvature visualization
         // (meshes often have inconsistent winding at high-curvature areas)
@@ -93,6 +96,7 @@ impl App {
             texture_path,
             parameterize,
             curvature_type,
+            geodesic,
             window: None,
             renderer: None,
             gpu_mesh: None,
@@ -131,7 +135,12 @@ impl ApplicationHandler for App {
             mesh,
             uv_map,
             vertex_colors,
-        } = prepare_mesh(&self.mesh_path, self.parameterize, self.curvature_type);
+        } = prepare_mesh(
+            &self.mesh_path,
+            self.parameterize,
+            self.curvature_type,
+            self.geodesic,
+        );
 
         // Create GPU mesh with optional UVs and vertex colors
         let gpu_mesh = GpuMesh::from_halfedge_mesh(
@@ -337,6 +346,9 @@ fn main() {
         eprintln!(
             "  --curvature <type>     Visualize curvature as vertex colors (mean or gaussian)"
         );
+        eprintln!("  --geodesic <vertex>    Colour by geodesic distance from a source vertex,");
+        eprintln!("                         with isolines (heat method)");
+        eprintln!("  --geodesic-dijkstra    Use Dijkstra graph distance instead");
         eprintln!("  --screenshot <file>    Render one frame to a PNG and exit (no window)");
         eprintln!("  --size WxH             Screenshot size, default 1200x900");
         eprintln!("  --azimuth <radians>    Camera azimuth for the screenshot, default 0.6");
@@ -365,6 +377,8 @@ fn main() {
     let mut texture_path: Option<PathBuf> = None;
     let mut parameterize = false;
     let mut curvature_type: Option<CurvatureType> = None;
+    let mut geodesic: Option<(usize, bool)> = None;
+    let mut geodesic_dijkstra = false;
     let mut screenshot: Option<PathBuf> = None;
     let mut size = (1200u32, 900u32);
     let mut azimuth = 0.6f32;
@@ -406,6 +420,20 @@ fn main() {
                     eprintln!("Error: --curvature requires 'mean' or 'gaussian'");
                     std::process::exit(1);
                 }
+            }
+            "--geodesic" => match args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+                Some(v) => {
+                    geodesic = Some((v, false));
+                    i += 2;
+                }
+                None => {
+                    eprintln!("Error: --geodesic requires a source vertex index");
+                    std::process::exit(1);
+                }
+            },
+            "--geodesic-dijkstra" => {
+                geodesic_dijkstra = true;
+                i += 1;
             }
             "--screenshot" => {
                 if i + 1 < args.len() {
@@ -470,6 +498,15 @@ fn main() {
         }
     }
 
+    // `--geodesic-dijkstra` is a modifier on `--geodesic`, so fold it in once both
+    // have been seen regardless of the order they appeared.
+    if let Some((source, _)) = geodesic {
+        geodesic = Some((source, geodesic_dijkstra));
+    } else if geodesic_dijkstra {
+        eprintln!("Error: --geodesic-dijkstra requires --geodesic <vertex>");
+        std::process::exit(1);
+    }
+
     // Offscreen path: render one frame to a file and exit without opening a window.
     if let Some(path) = screenshot {
         render_to_file(
@@ -477,6 +514,7 @@ fn main() {
             texture_path.as_deref(),
             parameterize,
             curvature_type,
+            geodesic,
             &path,
             size,
             azimuth,
@@ -491,7 +529,13 @@ fn main() {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App::new(mesh_path, texture_path, parameterize, curvature_type);
+    let mut app = App::new(
+        mesh_path,
+        texture_path,
+        parameterize,
+        curvature_type,
+        geodesic,
+    );
     event_loop.run_app(&mut app).expect("Event loop error");
 }
 
@@ -506,6 +550,7 @@ fn render_to_file(
     texture_path: Option<&std::path::Path>,
     parameterize: bool,
     curvature_type: Option<CurvatureType>,
+    geodesic: Option<(usize, bool)>,
     output: &std::path::Path,
     size: (u32, u32),
     azimuth: f32,
@@ -520,7 +565,7 @@ fn render_to_file(
         mesh,
         uv_map,
         vertex_colors,
-    } = prepare_mesh(mesh_path, parameterize, curvature_type);
+    } = prepare_mesh(mesh_path, parameterize, curvature_type, geodesic);
 
     let gpu_mesh = GpuMesh::from_halfedge_mesh(
         renderer.device(),
@@ -595,6 +640,7 @@ fn prepare_mesh(
     mesh_path: &str,
     parameterize: bool,
     curvature_type: Option<CurvatureType>,
+    geodesic: Option<(usize, bool)>,
 ) -> Prepared {
     log::info!("Loading mesh from: {}", mesh_path);
     let (mesh, file_uvs): (HalfEdgeMesh, Option<UVMap>) =
@@ -617,7 +663,44 @@ fn prepare_mesh(
         None
     };
 
-    let vertex_colors: Option<VertexColors> = if let Some(curv_type) = curvature_type {
+    let vertex_colors: Option<VertexColors> = if let Some((source, use_dijkstra)) = geodesic {
+        use morsel::algo::geodesic;
+        use morsel::mesh::VertexId;
+
+        if source >= mesh.num_vertices() {
+            eprintln!(
+                "Error: --geodesic source {source} is out of range (mesh has {} vertices)",
+                mesh.num_vertices()
+            );
+            std::process::exit(1);
+        }
+        let src = VertexId::new(source);
+
+        let distances = if use_dijkstra {
+            log::info!("Computing graph distances by Dijkstra from vertex {source}...");
+            geodesic::dijkstra(&mesh, src, &geodesic::DijkstraOptions::default())
+                .distances()
+                .to_vec()
+        } else {
+            log::info!("Computing geodesic distances by the heat method from vertex {source}...");
+            match geodesic::heat_method(&mesh, src, &geodesic::HeatMethodOptions::default()) {
+                Ok(r) => r.distances().to_vec(),
+                Err(e) => {
+                    eprintln!("Error: heat method failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        };
+
+        let unreachable = distances.iter().filter(|d| !d.is_finite()).count();
+        if unreachable > 0 {
+            eprintln!(
+                "warning: {unreachable} vertices are unreachable from vertex {source} \
+                 and are drawn grey; the mesh has more than one connected component."
+            );
+        }
+        Some(geodesic_to_vertex_colors(&distances, 12.0))
+    } else if let Some(curv_type) = curvature_type {
         log::info!("Computing curvature...");
         let curv_result = curvature::compute_curvature(&mesh);
 
@@ -653,6 +736,71 @@ fn prepare_mesh(
         uv_map,
         vertex_colors,
     }
+}
+
+/// Convert geodesic distances to vertex colours: a sequential ramp with periodic
+/// shading that reads as isolines.
+///
+/// Isolines are the point of a distance figure — evenly spaced rings mean the field
+/// really is a distance, and rings that bunch or kink show where it is not. The
+/// banding is sinusoidal in the distance rather than a hard threshold, because
+/// colours are per-vertex and interpolated across faces, so a sharp band would
+/// alias into whatever the triangulation happens to be.
+///
+/// Unreachable vertices — a different connected component — are flat grey rather
+/// than clamped to the far end of the ramp, so "no path" does not masquerade as
+/// "very far".
+fn geodesic_to_vertex_colors(distances: &[f64], bands: f64) -> VertexColors {
+    let max = distances
+        .iter()
+        .copied()
+        .filter(|d| d.is_finite())
+        .fold(0.0_f64, f64::max);
+    if max <= 0.0 {
+        return vec![[0.8, 0.8, 0.8]; distances.len()];
+    }
+
+    distances
+        .iter()
+        .map(|&d| {
+            if !d.is_finite() {
+                return [0.34, 0.34, 0.38];
+            }
+            let t = (d / max).clamp(0.0, 1.0);
+            let base = sequential_color(t);
+            let phase = (t * bands * std::f64::consts::TAU).cos();
+            let shade = (0.78 + 0.22 * phase) as f32;
+            [base[0] * shade, base[1] * shade, base[2] * shade]
+        })
+        .collect()
+}
+
+/// A sequential blue-to-pale-yellow ramp, ordered so that lightness increases
+/// monotonically with `t`. Monotone lightness is what makes the ramp readable in
+/// greyscale and to most colour-vision deficiencies.
+fn sequential_color(t: f64) -> [f32; 3] {
+    const STOPS: [(f64, [f32; 3]); 5] = [
+        (0.00, [0.04, 0.06, 0.28]),
+        (0.25, [0.10, 0.36, 0.65]),
+        (0.50, [0.13, 0.64, 0.60]),
+        (0.75, [0.62, 0.80, 0.31]),
+        (1.00, [0.98, 0.95, 0.996]),
+    ];
+
+    let t = t.clamp(0.0, 1.0);
+    for pair in STOPS.windows(2) {
+        let (t0, c0) = pair[0];
+        let (t1, c1) = pair[1];
+        if t <= t1 {
+            let u = ((t - t0) / (t1 - t0)) as f32;
+            return [
+                c0[0] + (c1[0] - c0[0]) * u,
+                c0[1] + (c1[1] - c0[1]) * u,
+                c0[2] + (c1[2] - c0[2]) * u,
+            ];
+        }
+    }
+    STOPS[STOPS.len() - 1].1
 }
 
 /// Convert curvature values to vertex colors using a blue-white-red colormap.
