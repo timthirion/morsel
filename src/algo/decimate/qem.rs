@@ -158,10 +158,25 @@ impl EdgeCandidate {
     }
 }
 
-// Implement ordering for min-heap (we want smallest error first)
+// Ordering for use in a min-heap: `BinaryHeap` pops the maximum, so this is reversed
+// and the cheapest collapse comes out first.
+//
+// The comparison is **total**, and that is what makes decimation deterministic. Ordering
+// on `error` alone leaves equal-cost candidates to be separated by their position in the
+// heap, which depends on the order they were pushed — and they were pushed while
+// iterating a `HashSet` of vertex neighbours, whose order Rust randomises per process.
+// The collapse sequence therefore differed run to run: `control_grid` produced four
+// distinct meshes in twelve runs, and `cocircular_lattice` five. Breaking ties on the
+// edge indices means no two distinct edges ever compare `Equal`, so the pop order is
+// fixed by the heap's contents alone.
+//
+// `total_cmp` rather than `partial_cmp(..).unwrap_or(Equal)` for the same reason: a NaN
+// cost would otherwise compare `Equal` to everything and reintroduce the dependence on
+// insertion order. NaN sorts as the most expensive collapse, so it is simply never
+// chosen.
 impl PartialEq for EdgeCandidate {
     fn eq(&self, other: &Self) -> bool {
-        self.error == other.error
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -175,11 +190,12 @@ impl PartialOrd for EdgeCandidate {
 
 impl Ord for EdgeCandidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering for min-heap
         other
             .error
-            .partial_cmp(&self.error)
-            .unwrap_or(Ordering::Equal)
+            .total_cmp(&self.error)
+            // Reversed alongside the cost, so the lower-numbered edge wins a tie.
+            .then_with(|| other.v0.cmp(&self.v0))
+            .then_with(|| other.v1.cmp(&self.v1))
     }
 }
 
@@ -547,8 +563,17 @@ fn decimate_mesh(
         // Rebuild edge_faces for affected edges
         rebuild_edge_faces_for_vertex(v_keep, &faces, &valid_faces, &mut edge_faces);
 
-        // Add new edge candidates for edges around v_keep
-        let neighbors = get_vertex_neighbors(v_keep, &faces, &valid_faces);
+        // Add new edge candidates for edges around v_keep.
+        //
+        // Sorted, because `get_vertex_neighbors` returns a `HashSet`. The total order on
+        // `EdgeCandidate` already makes the *pop* order independent of how these were
+        // pushed, so this is belt and braces — but it keeps the whole pipeline free of
+        // hash iteration order, so a future change here cannot quietly reintroduce the
+        // problem.
+        let mut neighbors: Vec<usize> = get_vertex_neighbors(v_keep, &faces, &valid_faces)
+            .into_iter()
+            .collect();
+        neighbors.sort_unstable();
         for &neighbor in &neighbors {
             if !valid_vertices[neighbor] {
                 continue;

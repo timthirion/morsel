@@ -193,7 +193,7 @@ morsel smooth input.obj output.obj --method taubin --iterations 5
 # Subdivide a mesh
 morsel subdivide input.obj output.obj --method loop --iterations 2
 
-# Decimate to 50% of faces
+# Decimate to 50% of faces (deterministic: same input, same output, bit for bit)
 morsel decimate input.obj output.obj --ratio 0.5
 
 # Decimate to exactly 1000 faces

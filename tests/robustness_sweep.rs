@@ -367,35 +367,20 @@ fn with_quiet_panics<T>(f: impl FnOnce() -> T) -> T {
 /// collapse sequence is now rejected rather than accepted.
 const BORN_BROKEN: &[&str] = &[];
 
-/// Pairs whose outcome varies between runs of the same binary. For an algorithm that is
-/// order-dependent on *every* mesh, use `ORDER_DEPENDENT` instead.
+/// Pairs whose outcome varies between runs of the same binary.
 ///
-/// **Empty since July 2026.** QEM decimation was order-dependent — 3 failures in
-/// 8 runs on `control_grid`, identically with `parallel` true and false, because
-/// `std::collections::HashMap` randomises iteration order per process, so the
-/// collapse sequence differed each run and only some sequences produced a broken
-/// mesh. It is still order-dependent, but the outcome is no longer *invalid*
-/// either way: a sequence that would have produced a non-manifold result is now
-/// rejected at rebuild. Measured 0 corruptions in 12 runs across four meshes that
-/// previously failed.
+/// **Empty since July 2026, and nothing is expected to need it again.** QEM decimation
+/// was the only occupant: 3 failures in 8 runs on `control_grid`, identically with
+/// `parallel` true and false, because its collapse sequence depended on hash iteration
+/// order and only some sequences produced a broken mesh.
+///
+/// That was addressed in two steps. First `build_from_triangles` began validating, so a
+/// sequence heading for a non-manifold result was rejected at rebuild rather than
+/// accepted — the outcome stopped being *invalid* either way, though it stayed
+/// order-dependent. Then the candidate heap gained a total order, so the collapse
+/// sequence itself is fixed: see `tests/decimate_determinism.rs`. Both directions are
+/// pinned now, and the `decimate:qem` column below is exact.
 const NONDETERMINISTIC: &[(&str, &str)] = &[];
-
-/// Algorithms whose *outcome* depends on iteration order, so no per-mesh result is
-/// pinned for them. `Panicked` and `Corrupted` are still failures — only the
-/// `Ok`/`Refused` distinction is treated as unpinnable.
-///
-/// QEM decimation is the only one. It was already known to be order-dependent, but that
-/// used to be invisible: the back-off silently delivered a milder reduction and the
-/// sweep saw a valid mesh either way. Now that it reports, the same pair reads `Ok` on
-/// some runs and `Refused` on others. Over ten runs of one binary, two drifted, on a
-/// different mesh each time — `control_grid` in one and `cocircular_lattice` in the
-/// other, both "wanted 16 faces, got 24 after 2 attempts". Enumerating the flaky pairs
-/// is a losing game; four turned up before this replaced them.
-///
-/// The real fix is a deterministic collapse order — the sequence comes from `HashMap`
-/// iteration — which would let this column be pinned exactly again. Recorded in
-/// `plans/0002-research-program.md`.
-const ORDER_DEPENDENT: &[&str] = &["decimate:qem"];
 
 /// Recorded per-algorithm behaviour on inputs that *were* valid. Anything absent
 /// is expected to be `Ok`.
@@ -467,10 +452,19 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     ("sliver_triangles", "remesh:cvt", Outcome::Refused),
     ("two_components", "remesh:cvt", Outcome::Refused),
     ("unreferenced_vertex", "remesh:cvt", Outcome::Refused),
-    // QEM has no entries here: see `ORDER_DEPENDENT`. Its back-off is worth knowing
-    // about even unpinned — `high_valence_fan` asks for 32 faces and gets 62 after five
-    // attempts, so a caller asking to halve the mesh is quietly handed a quarter of the
-    // reduction. The caller is told now, even though the sweep cannot pin it.
+    // QEM decimation. Pinnable again as of July 2026: its candidate heap ordered
+    // collapses on cost alone, so ties were broken by the order candidates were pushed,
+    // which came from `HashSet` iteration. `control_grid` produced four distinct meshes
+    // in twelve runs. The ordering is total now, so these are exact.
+    //
+    // Only the two single-face meshes appear, and only because halving one face rounds to
+    // a target of one — nothing is asked for, so nothing is done. Everything else now
+    // reaches its requested target on every run, including `high_valence_fan`, which used
+    // to back off in every run observed. A consistent tie-break turns out to find a
+    // collapse sequence that succeeds where the arbitrary ones often did not, so this was
+    // a correctness improvement as well as a reproducibility one.
+    ("single_triangle", "decimate:qem", Outcome::Refused),
+    ("unreferenced_vertex", "decimate:qem", Outcome::Refused),
 ];
 
 fn baseline() -> BTreeMap<(&'static str, &'static str), Outcome> {
@@ -622,18 +616,11 @@ fn robustness_matrix_matches_baseline() {
         if *outcome == Outcome::Inherited {
             continue;
         }
-        // Known order-dependent pairs may land either way within one run. `Refused` is
-        // in the exempt set because that is the shape the flakiness now takes: QEM's
-        // back-off either finds a target that rebuilds or does not, depending on collapse
-        // order. `Panicked` is deliberately not exempt — nothing excuses a panic.
+        // Known order-dependent pairs may land either way within one run. `Panicked` is
+        // deliberately not exempt — nothing excuses a panic.
         if NONDETERMINISTIC.contains(&(*mesh, *algo))
             && matches!(outcome, Outcome::Ok | Outcome::Corrupted)
         {
-            continue;
-        }
-        // Order-dependent algorithms: whether they succeed or decline varies per run, so
-        // only `Panicked` and `Corrupted` are pinned for them.
-        if ORDER_DEPENDENT.contains(algo) && matches!(outcome, Outcome::Ok | Outcome::Refused) {
             continue;
         }
         let want = expected

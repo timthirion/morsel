@@ -402,13 +402,33 @@ compare numerically. Cheap to design in now, painful to retrofit.
       passes still improve. Anisotropic does break, because its non-convergence means a
       pass bound was hit — divergence, not one unlucky step. My own quality test caught
       the regression.
-- [ ] **Make QEM decimation deterministic.** Its collapse order comes from `HashMap`
-      iteration, so whether the back-off fires varies per run: over ten runs of one
-      sweep binary, two drifted, on a different mesh each time. The sweep now exempts
-      the whole `decimate:qem` column from per-mesh pinning (`ORDER_DEPENDENT` in
-      `tests/robustness_sweep.rs`) rather than enumerate flaky pairs — four turned up
-      before that replaced them. A sorted or BTreeMap-based collapse order would let the
-      column be pinned exactly again.
+- [x] **QEM decimation is deterministic** (July 2026). The cause was not `HashMap`
+      lookups but the candidate heap's *ordering*: `EdgeCandidate` compared on cost
+      alone, so equal-cost collapses were separated only by the order they were pushed —
+      and they were pushed while iterating a `HashSet` of vertex neighbours, which Rust
+      reseeds per instance. `control_grid` produced four distinct meshes in twelve runs
+      of one process, `cocircular_lattice` five, and six of the thirteen corpus meshes
+      varied.
+
+      The fix is a total order: ties break on the edge indices, so no two distinct edges
+      ever compare `Equal` and the pop sequence is fixed by the heap's contents alone.
+      `total_cmp` replaces `partial_cmp(..).unwrap_or(Equal)` for the same reason — a NaN
+      cost would compare equal to everything and reintroduce the dependence. The
+      neighbour set is also sorted before pushing, which is redundant given the total
+      order but keeps hash iteration out of the pipeline entirely.
+
+      It turned out to be a correctness improvement too, not only a reproducibility one.
+      A consistent tie-break finds a collapse sequence that succeeds where arbitrary ones
+      often did not: `high_valence_fan` backed off in every run previously observed and
+      now reaches its target every time. The `decimate:qem` column in the sweep is pinned
+      exactly again, with only the two single-face meshes recorded — verified over 25
+      separate processes — and `tests/decimate_determinism.rs` compares results by
+      floating-point *bit pattern*, since two collapse orders can agree to fifteen digits
+      and still differ.
+
+      Still outstanding, and unrelated to determinism: `is_collapse_valid` is not
+      airtight, so the back-off still fires on the bunny (2484 faces requested, 3725
+      delivered) and the cylinder. Reproducibly, and the caller is told.
 - [ ] Expose `geodesic` in the CLI. The CVT and anisotropic remeshers are exposed
       now (`morsel remesh --method cvt|anisotropic`) and covered by the sweep.
 

@@ -20,7 +20,16 @@
 //!
 //! // Reduce to 50% of original faces
 //! let options = DecimateOptions::with_target_ratio(0.5);
-//! qem_decimate(&mut mesh, &options);
+//! let report = qem_decimate(&mut mesh, &options);
+//!
+//! // Worth checking: a collapse sequence can end in a configuration the half-edge
+//! // mesh cannot represent, in which case a milder reduction is used instead.
+//! if !report.completed() {
+//!     eprintln!(
+//!         "wanted {} faces, got {} ({:?})",
+//!         report.faces_requested, report.faces_after, report.outcome
+//!     );
+//! }
 //!
 //! morsel::io::save(&mesh, "output.obj").unwrap();
 //! ```
@@ -59,6 +68,10 @@ pub enum DecimateOutcome {
 /// individually legal collapses still produces a bowtie — so a rejected target is
 /// retried more mildly. That silently gave callers a different mesh than they asked
 /// for; now they can tell.
+///
+/// Whatever it reports is reproducible: the collapse order is deterministic, so the same
+/// input and options give the same mesh down to the bit, run after run. See
+/// `tests/decimate_determinism.rs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "decimation can back off or refuse; check the report"]
 pub struct DecimateReport {
