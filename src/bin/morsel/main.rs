@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use morsel::algo::{curvature, decimate, parameterize, remesh, smooth, subdivide, Progress};
+use morsel::algo::{
+    curvature, decimate, parameterize, quality, remesh, smooth, subdivide, Progress,
+};
 use morsel::io;
 use morsel::mesh::HalfEdgeMesh;
 
@@ -143,6 +145,12 @@ enum Commands {
         layout: Option<PathBuf>,
     },
 
+    /// Report triangle-quality statistics
+    Quality {
+        /// Input mesh file
+        input: PathBuf,
+    },
+
     /// Cut a mesh open until it has one boundary loop (disk topology)
     Cut {
         /// Input mesh file
@@ -182,9 +190,15 @@ enum Commands {
         #[arg(short, long, value_enum, default_value = "isotropic")]
         method: RemeshMethod,
 
-        /// Target edge length (default: average edge length)
+        /// Target edge length (default: average edge length).
+        /// Used by isotropic and anisotropic.
         #[arg(short = 'l', long)]
         target_length: Option<f64>,
+
+        /// Target vertex count, for `--method cvt`. Must be below the
+        /// input count for Lloyd's iteration to have anything to move.
+        #[arg(long)]
+        target_vertices: Option<usize>,
 
         /// Number of iterations
         #[arg(short, long, default_value = "5")]
@@ -228,8 +242,18 @@ enum GeodesicMethod {
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum RemeshMethod {
-    /// Isotropic remeshing (uniform edge lengths)
+    /// Isotropic remeshing, aiming for uniform edge lengths. The
+    /// one that reliably improves quality; see `tests/remesh_quality.rs`.
     Isotropic,
+    /// Curvature-adaptive remeshing. Improves quality on some
+    /// meshes and degrades it badly on others (a cylinder's worst
+    /// angle drops from 43.7 to about 10), and shrinks the surface
+    /// by up to 15%. Reports whether it converged.
+    Anisotropic,
+    /// CVT resampling by Lloyd's algorithm. Needs `--target-vertices`
+    /// below the input count; without it each Voronoi cell holds one
+    /// vertex and the iteration has nothing to move.
+    Cvt,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -334,6 +358,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
 
+        Commands::Quality { input } => {
+            cmd_quality(&input)?;
+        }
+
         Commands::Cut { input, output } => {
             cmd_cut(&input, &output)?;
         }
@@ -352,6 +380,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             method,
             target_length,
+            target_vertices,
             iterations,
             sequential,
         } => {
@@ -360,6 +389,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &output,
                 method,
                 target_length,
+                target_vertices,
                 iterations,
                 sequential,
             )?;
@@ -811,6 +841,7 @@ fn cmd_remesh(
     output: &PathBuf,
     method: RemeshMethod,
     target_length: Option<f64>,
+    target_vertices: Option<usize>,
     iterations: usize,
     sequential: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -830,6 +861,7 @@ fn cmd_remesh(
 
     let mode = if sequential { "sequential" } else { "parallel" };
     let progress = create_progress();
+    let before = quality::mesh_quality(&mesh);
 
     let start = Instant::now();
     match method {
@@ -843,6 +875,45 @@ fn cmd_remesh(
                 .with_parallel(!sequential);
             remesh::isotropic_remesh_with_progress(&mut mesh, &options, &progress);
         }
+        RemeshMethod::Anisotropic => {
+            println!(
+                "Applying anisotropic remeshing ({} iterations, {})...",
+                iterations, mode
+            );
+            let options = remesh::AnisotropicOptions::new(0.5 * target, 2.0 * target)
+                .with_iterations(iterations);
+            let report = remesh::anisotropic_remesh_with_progress(&mut mesh, &options, &progress);
+            if !report.converged {
+                eprintln!(
+                    "warning: anisotropic remeshing stopped after {} of {iterations} \
+                     iteration(s) without converging. The mesh is the last state it \
+                     reached, not a finished result.",
+                    report.iterations_run
+                );
+            }
+        }
+        RemeshMethod::Cvt => {
+            let vertices = target_vertices.unwrap_or_else(|| mesh.num_vertices() * 2 / 3);
+            if vertices == 0 || vertices >= mesh.num_vertices() {
+                return Err(format!(
+                    "--target-vertices must be between 1 and {} (exclusive); at or above \
+                     the input count each Voronoi cell holds a single vertex, whose \
+                     centroid is that vertex, so Lloyd's iteration has nothing to move.",
+                    mesh.num_vertices()
+                )
+                .into());
+            }
+            println!(
+                "Applying CVT resampling to {vertices} vertices \
+                 ({iterations} Lloyd iterations)..."
+            );
+            let options = remesh::CvtOptions {
+                target_vertices: Some(vertices),
+                iterations,
+                ..Default::default()
+            };
+            remesh::cvt_remesh_with_progress(&mut mesh, &options, &progress);
+        }
     }
     let elapsed = start.elapsed();
 
@@ -853,9 +924,36 @@ fn cmd_remesh(
         mesh.num_faces(),
         new_avg
     );
+
+    // Remeshing is a claim about triangle quality, so report the quality rather than
+    // leaving the caller to take it on trust. Worst and mean both, because they can
+    // disagree sharply: on the bunny, isotropic remeshing lifts the mean from 35.9° to
+    // 51.4° while emitting a face with no usable area.
+    if let (Some(before), Some(after)) = (before, quality::mesh_quality(&mesh)) {
+        println!(
+            "Triangle quality: worst angle {:.2}° -> {:.2}°, mean {:.2}° -> {:.2}°, \
+             radius ratio {:.3} -> {:.3}, edge cv {:.3} -> {:.3}",
+            before.min_angle_deg,
+            after.min_angle_deg,
+            before.mean_min_angle_deg,
+            after.mean_min_angle_deg,
+            before.mean_radius_ratio,
+            after.mean_radius_ratio,
+            before.edge_length_cv,
+            after.edge_length_cv
+        );
+    }
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
+    Ok(())
+}
+
+fn cmd_quality(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let mesh: HalfEdgeMesh = io::load(input)?;
+    let report = quality::mesh_quality(&mesh).ok_or("mesh has no faces to measure")?;
+    println!("{}", input.display());
+    println!("{}", report.summary());
     Ok(())
 }
 

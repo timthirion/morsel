@@ -6,6 +6,28 @@
 //! - **Anisotropic remeshing**: Edge lengths adapted to local curvature
 //! - **CVT remeshing**: Centroidal Voronoi Tessellation for optimal vertex distribution
 //!
+//! # Which one to use
+//!
+//! **Isotropic**, unless you have a specific reason otherwise. It is the only one of the
+//! three that reliably improves triangle quality; `tests/remesh_quality.rs` measures all
+//! of them with [`crate::algo::quality`] and records what each actually does.
+//!
+//! The caveats on the other two are not stylistic:
+//!
+//! - **Anisotropic** improves the *mean* triangle quality everywhere but makes the
+//!   *worst* triangle substantially worse on some meshes — a cylinder's worst angle drops
+//!   from 43.7° to about 10° — and it reports having converged while doing so. Check
+//!   [`RemeshReport::converged`], which is `false` when a pass hit its bound rather than
+//!   settling.
+//! - **CVT** needs [`CvtOptions::target_vertices`] set *below* the input vertex count.
+//!   Left at `None` the seed count equals the vertex count, so each Voronoi cell holds
+//!   about one vertex, whose centroid is that vertex, and Lloyd's iteration has nothing
+//!   to move.
+//!
+//! And one caveat that applies to all three: none of them projects its smoothed vertices
+//! back onto the input surface, so all of them shrink it. On a sphere of radius 0.5 the
+//! drift is 2.7% for isotropic, 1.2% for CVT, and 15% for anisotropic.
+//!
 //! # Isotropic Remeshing
 //!
 //! The isotropic remeshing algorithm (Botsch & Kobbelt, 2004) iteratively applies:
@@ -71,6 +93,26 @@ use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
+
+/// What a remeshing pass did.
+///
+/// `converged` is the part worth checking. These remeshers iterate split/collapse
+/// passes until nothing changes, and that is not guaranteed to happen: see the note in
+/// `split_long_edges_anisotropic`. A pass that hits its bound, or produces a mesh the
+/// half-edge representation will not accept, leaves the mesh in the last good state it
+/// reached and reports `converged: false` rather than claiming success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a remesh may not have converged; check the report"]
+pub struct RemeshReport {
+    /// Iterations actually run.
+    pub iterations_run: usize,
+    /// Whether every pass ran to completion.
+    pub converged: bool,
+    /// Face count before.
+    pub faces_before: usize,
+    /// Face count after.
+    pub faces_after: usize,
+}
 
 // ============================================================================
 // Pre-computed Mesh Topology for O(1) Lookups

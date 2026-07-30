@@ -334,8 +334,53 @@ compare numerically. Cheap to design in now, painful to retrofit.
       bunny and sphere with bowtie vertices. Neither pointed at the fan.
 - [ ] Mesh `repair` — dropping unreferenced vertices, which currently make a mesh
       count as disconnected and so block cutting.
-- [ ] Expose `geodesic` and the CVT/anisotropic remeshers in the CLI (~3,400
-      lines of working code currently unreachable).
+- [x] Measurement harness for triangle quality (`src/algo/quality.rs`, July 2026):
+      minimum angle, radius ratio `2r/R`, a 10° min-angle histogram, edge-length
+      uniformity, and interior-valence regularity. Validated against closed forms
+      first — equilateral gives 60° and `1`, right isoceles gives 45/45/90 and
+      `2√2 − 2`, a sliver of height `h` gives `atan(2h)` to `1e-14` — because a
+      metric that is subtly wrong would certify improvements that never happened.
+      `morsel quality` reports it, and `morsel remesh` now prints it before and
+      after, so remeshing states its case instead of asserting it.
+
+      What it found, immediately, in 3,234 lines of remeshing whose only prior
+      coverage was "did it return a structurally valid mesh":
+
+      - **`anisotropic_remesh` did not terminate.** On `spherical-cap.obj` the
+        second iteration settled into adding exactly one vertex and two faces per
+        pass, forever; the default five iterations never returned. Both `while
+        changed` passes are now bounded and it returns a `RemeshReport` whose
+        `converged` flag says when a bound was hit.
+      - **Anisotropic degrades what it claims to improve.** The cylinder's worst
+        angle goes 43.7° → 10.2° *while reporting convergence*; the torus and bunny
+        also get worse. Its mean improves throughout, which is how this stayed
+        invisible. Isotropic is the remesher to reach for.
+      - **All three remeshers shrink the surface.** None projects smoothed vertices
+        back onto the input. On a sphere of radius 0.5 the drift is 2.7% for
+        isotropic, 1.2% for CVT, and **15% for anisotropic**, whose every vertex
+        ends up inside the sphere. Quality numbers alone cannot settle a remeshing
+        claim, which is why `tests/remesh_quality.rs` measures both.
+      - **CVT's default is degenerate by construction.** With
+        `target_vertices: None` the seed count equals the vertex count, so each
+        Voronoi cell holds about one vertex, whose centroid is that vertex, and
+        Lloyd's iteration has nothing to move. Given a real target it works: the
+        sphere's worst angle goes 19.6° → 24.7°. The CLI now refuses a target at or
+        above the input count instead of quietly doing nothing.
+      - **Isotropic emits a degenerate face on the bunny.** Mean minimum angle
+        35.9° → 51.4° and mean radius ratio 0.74 → 0.95, its best aggregate result
+        of the five meshes — with a worst angle of `5.5e-8°`. The single strongest
+        argument for reporting worst and mean side by side.
+- [ ] **Eight sites still discard a rebuild error**, each one able to report success
+      having done nothing: `if let Ok(new_mesh) = build_from_triangles(…)` with no
+      `else`, in isotropic (2), cvt (2), remesh/mod (1), loop subdivision (1),
+      Catmull-Clark (1), and QEM (1, via `.ok()`, where the decimation back-off does
+      handle it). This hole only became reachable when `build_from_triangles` started
+      validating — before that these calls returned a corrupt mesh instead, which is
+      worse. Three more in anisotropic are fixed. The remedy is the one used there:
+      return a report and let the caller see it. `RemeshReport` in
+      `src/algo/remesh/mod.rs` is the shape to reuse.
+- [ ] Expose `geodesic` in the CLI. The CVT and anisotropic remeshers are exposed
+      now (`morsel remesh --method cvt|anisotropic`) and covered by the sweep.
 
 ### M1 — choose and open a lane (≈ 6–18 months)
 

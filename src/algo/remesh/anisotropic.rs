@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::remesh::RemeshReport;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
@@ -101,8 +102,11 @@ impl AnisotropicOptions {
 ///
 /// This algorithm produces a mesh with edge lengths adapted to local curvature:
 /// shorter edges in high-curvature regions, longer edges in flat regions.
-pub fn anisotropic_remesh<I: MeshIndex>(mesh: &mut HalfEdgeMesh<I>, options: &AnisotropicOptions) {
-    anisotropic_remesh_internal(mesh, options, None);
+pub fn anisotropic_remesh<I: MeshIndex>(
+    mesh: &mut HalfEdgeMesh<I>,
+    options: &AnisotropicOptions,
+) -> RemeshReport {
+    anisotropic_remesh_internal(mesh, options, None)
 }
 
 /// Performs anisotropic remeshing with progress reporting.
@@ -112,36 +116,45 @@ pub fn anisotropic_remesh_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &AnisotropicOptions,
     progress: &Progress,
-) {
-    anisotropic_remesh_internal(mesh, options, Some(progress));
+) -> RemeshReport {
+    anisotropic_remesh_internal(mesh, options, Some(progress))
 }
 
 fn anisotropic_remesh_internal<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     options: &AnisotropicOptions,
     progress: Option<&Progress>,
-) {
+) -> RemeshReport {
+    let faces_before = mesh.num_faces();
+    let unchanged = |iterations_run, converged| RemeshReport {
+        iterations_run,
+        converged,
+        faces_before,
+        faces_after: faces_before,
+    };
+
     if options.iterations == 0
         || options.min_length <= 0.0
         || options.max_length <= options.min_length
     {
-        return;
+        return unchanged(0, false);
     }
 
+    let mut converged = true;
+    let mut iterations_run = 0;
     for iter in 0..options.iterations {
         if let Some(p) = progress {
             p.report(iter, options.iterations, "Anisotropic remeshing");
         }
+        iterations_run += 1;
 
         let sizing = compute_sizing_field(mesh, options);
-
-        split_long_edges_anisotropic(mesh, &sizing, options.preserve_boundary);
+        converged &= split_long_edges_anisotropic(mesh, &sizing, options.preserve_boundary);
 
         let sizing = compute_sizing_field(mesh, options);
+        converged &= collapse_short_edges_anisotropic(mesh, &sizing, options.preserve_boundary);
 
-        collapse_short_edges_anisotropic(mesh, &sizing, options.preserve_boundary);
-
-        flip_edges_to_improve_valence(mesh, options.preserve_boundary);
+        converged &= flip_edges_to_improve_valence(mesh, options.preserve_boundary);
 
         for _ in 0..options.smoothing_iterations {
             tangential_smooth(
@@ -153,6 +166,13 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
         }
 
         let _ = sizing;
+
+        // A pass that could not finish will not finish next time either, and running on
+        // would only pile more work onto a mesh already in a state the algorithm cannot
+        // handle.
+        if !converged {
+            break;
+        }
     }
 
     // Report completion
@@ -162,6 +182,13 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
             options.iterations,
             "Anisotropic remeshing complete",
         );
+    }
+
+    RemeshReport {
+        iterations_run,
+        converged,
+        faces_before,
+        faces_after: mesh.num_faces(),
     }
 }
 
@@ -282,17 +309,34 @@ pub(crate) fn cotangent_weight(e1: &Vector3<f64>, e2: &Vector3<f64>) -> f64 {
 }
 
 /// Split edges longer than their local target.
+///
+/// Returns whether the pass ran to completion; `false` means it was cut off, either by
+/// the pass bound or by a rebuild the mesh representation would not accept.
 fn split_long_edges_anisotropic<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     sizing: &SizingField,
     preserve_boundary: bool,
-) {
+) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
     let mut vertex_sizes = sizing.vertex_sizes.clone();
+
+    // Splitting is not guaranteed to converge here, and on some inputs it does not:
+    // on `examples/spherical-cap.obj` the second remeshing iteration settles into
+    // adding exactly one vertex and two faces per pass, without bound, because there
+    // is always one more edge over its local threshold. Rather than leave the caller
+    // hanging, stop once the pass count is out of proportion to the mesh — a
+    // refinement that has taken more passes than the mesh has faces is not converging.
+    // `converged` is returned so the caller can say so instead of pretending.
+    let max_passes = faces.len().max(64) * 2;
+    let mut passes = 0usize;
 
     let mut changed = true;
     while changed {
         changed = false;
+        passes += 1;
+        if passes > max_passes {
+            return false;
+        }
 
         let mut edges_to_split: Vec<(usize, usize)> = Vec::new();
         let mut seen_edges: HashSet<(usize, usize)> = HashSet::new();
@@ -337,23 +381,42 @@ fn split_long_edges_anisotropic<I: MeshIndex>(
         }
     }
 
-    if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
-        *mesh = new_mesh;
+    // A rejected rebuild means this pass produced something the mesh representation
+    // cannot hold, so the mesh is left as it was and the caller is told.
+    match build_from_triangles::<I>(&vertices, &faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 
 /// Collapse edges shorter than their local target.
+///
+/// Returns whether the pass ran to completion. See
+/// [`split_long_edges_anisotropic`].
 fn collapse_short_edges_anisotropic<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     sizing: &SizingField,
     preserve_boundary: bool,
-) {
+) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
     let mut vertex_sizes = sizing.vertex_sizes.clone();
+
+    // One collapse per pass, each pass rescanning every face, so this is quadratic in
+    // the face count even when it does terminate. The bound keeps a pathological input
+    // from monopolising the caller's thread; see the note in `split_long_edges_anisotropic`.
+    let max_passes = faces.len().max(64) * 2;
+    let mut passes = 0usize;
 
     let mut changed = true;
     while changed {
         changed = false;
+        passes += 1;
+        if passes > max_passes {
+            return false;
+        }
 
         let mut edge_to_collapse: Option<(usize, usize)> = None;
         let mut seen_edges: HashSet<(usize, usize)> = HashSet::new();
@@ -412,10 +475,18 @@ fn collapse_short_edges_anisotropic<I: MeshIndex>(
 
     let (clean_vertices, clean_faces) = cleanup_mesh(&vertices, &faces);
 
-    if !clean_faces.is_empty() {
-        if let Ok(new_mesh) = build_from_triangles::<I>(&clean_vertices, &clean_faces) {
+    if clean_faces.is_empty() {
+        // Collapsing consumed the whole mesh, which is a failure however it is dressed.
+        return false;
+    }
+    // A rejected rebuild means this pass produced something the mesh representation
+    // cannot hold, so the mesh is left as it was and the caller is told.
+    match build_from_triangles::<I>(&clean_vertices, &clean_faces) {
+        Ok(new_mesh) => {
             *mesh = new_mesh;
+            true
         }
+        Err(_) => false,
     }
 }
 
@@ -475,20 +546,29 @@ fn can_collapse_edge_anisotropic(
 }
 
 /// Flip edges to improve vertex valence.
+///
+/// Returns whether the pass ran to completion. See
+/// [`split_long_edges_anisotropic`].
 fn flip_edges_to_improve_valence<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     preserve_boundary: bool,
-) {
+) -> bool {
     let (vertices, mut faces) = to_face_vertex(mesh);
 
     flip_edges_for_valence_faces(&vertices, &mut faces, preserve_boundary);
 
     if !validate_face_list(&vertices, &faces) {
-        return;
+        return false;
     }
 
-    if let Ok(new_mesh) = build_from_triangles::<I>(&vertices, &faces) {
-        *mesh = new_mesh;
+    // A rejected rebuild means this pass produced something the mesh representation
+    // cannot hold, so the mesh is left as it was and the caller is told.
+    match build_from_triangles::<I>(&vertices, &faces) {
+        Ok(new_mesh) => {
+            *mesh = new_mesh;
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -553,7 +633,7 @@ mod tests {
         let mut mesh = create_tetrahedron();
 
         let options = AnisotropicOptions::new(0.3, 1.0).with_iterations(1);
-        anisotropic_remesh(&mut mesh, &options);
+        let _ = anisotropic_remesh(&mut mesh, &options);
 
         assert!(mesh.is_valid());
         assert!(mesh.num_faces() > 0);
@@ -567,7 +647,7 @@ mod tests {
             + mesh.num_faces() as i32;
 
         let options = AnisotropicOptions::new(0.3, 0.8).with_iterations(2);
-        anisotropic_remesh(&mut mesh, &options);
+        let _ = anisotropic_remesh(&mut mesh, &options);
 
         let new_euler = mesh.num_vertices() as i32 - (mesh.num_halfedges() / 2) as i32
             + mesh.num_faces() as i32;
@@ -583,7 +663,7 @@ mod tests {
         let original_face_count = mesh.num_faces();
 
         let options = AnisotropicOptions::new(0.3, 1.0).with_iterations(0);
-        anisotropic_remesh(&mut mesh, &options);
+        let _ = anisotropic_remesh(&mut mesh, &options);
 
         assert_eq!(mesh.num_faces(), original_face_count);
         for (vid, orig) in mesh.vertex_ids().zip(original_vertices.iter()) {

@@ -84,8 +84,15 @@ direction, not because they've been decided.
   generator exists now, but a shortest path is short, not well placed: a short slit
   on a sphere still leaves LSCM with a worst area ratio of 8.1. Placing seams to
   minimise distortion is the open part.
-- **Measurement harness** — Hausdorff and triangle-quality metrics as first-class
-  reportable numbers, so decimation and remeshing claims are defensible the way
-  the parameterization ones now are.
+- **Measurement harness** — triangle quality landed (`src/algo/quality.rs`) and
+  immediately turned up non-termination in the anisotropic remesher, a worst-case
+  quality *regression* it reported as convergence, and up to 15% shrinkage across all
+  three remeshers. Still missing: a **Hausdorff distance**, without which "the shape
+  was preserved" stays an assertion. The sphere-radius check in
+  `tests/remesh_quality.rs` is a stand-in that only works on surfaces with a closed
+  form.
+- **Projecting back onto the surface** — none of the remeshers do it, so all of them
+  shrink the input. Tangential-only smoothing is the cheap principled fix and needs no
+  spatial index; a true nearest-point projection needs one.
 - **Viewer** — the existing curvature viewer grown into something that can show a
   UV atlas and distortion heatmaps.

@@ -10,6 +10,7 @@
 //! - **Cutting**: cutting a surface to disk topology, which parameterization needs
 //! - **Geodesics**: Dijkstra, heat method
 //! - **Curvature**: Discrete curvature estimation
+//! - **Quality**: Triangle-quality measurement, for checking the claims the others make
 //!
 //! Algorithms are added incrementally as the library develops. Vertex clustering,
 //! exact polyhedral geodesics, and repair (non-manifold repair, hole filling) are
@@ -21,6 +22,7 @@ pub mod decimate;
 pub mod geodesic;
 pub mod parameterize;
 pub mod progress;
+pub mod quality;
 pub mod remesh;
 pub mod smooth;
 pub mod subdivide;

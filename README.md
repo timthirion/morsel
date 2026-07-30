@@ -202,6 +202,13 @@ morsel decimate input.obj output.obj --faces 1000
 # Remesh with target edge length
 morsel remesh input.obj output.obj --target-length 0.1
 
+# Curvature-adaptive, or CVT resampling to a vertex budget
+morsel remesh input.obj output.obj --method anisotropic
+morsel remesh input.obj output.obj --method cvt --target-vertices 500
+
+# Triangle-quality statistics on their own
+morsel quality examples/stanford-bunny.obj
+
 # UV-unwrap an open (disk-topology) mesh, angle-preserving
 morsel parameterize patch.obj patch_uv.obj --method lscm
 
@@ -236,6 +243,22 @@ corners, leaving every face and every position exactly where it was. It is the s
 *placement* that is unambitious — a shortest path is short, not well placed, and a
 short slit on a sphere leaves a lot of distortion behind (LSCM's worst area ratio on
 the cut sphere is 8.1). Choosing seams to minimise distortion is a separate problem.
+
+`remesh` reports triangle quality before and after, because that is the claim it is
+making. **Use `isotropic`** unless you have a reason not to — it is the only one of the
+three that reliably improves quality, and `tests/remesh_quality.rs` measures all of
+them against [`src/algo/quality.rs`](src/algo/quality.rs) to say so. `anisotropic`
+improves the *mean* everywhere but takes the cylinder's worst angle from 43.7° down to
+about 10°, and `cvt` needs `--target-vertices` below the input count or Lloyd's
+iteration has nothing to move. None of the three projects vertices back onto the input
+surface, so all of them shrink it — by 2.7%, 1.2% and 15% respectively on a sphere of
+radius 0.5.
+
+That reporting is worth having for a specific reason: on the bunny, isotropic remeshing
+lifts the mean minimum angle from 35.9° to 51.4° and the mean radius ratio from 0.74 to
+0.95 — its best aggregate result anywhere — while emitting one triangle with an angle of
+`5.5e-8°`. Worst and mean can point in opposite directions, so `quality` prints both,
+along with a 10° histogram of minimum angles.
 
 `geodesic` defaults to the heat method, which measures distance across faces.
 `--method dijkstra` walks the edge graph instead and can only overestimate — by 15%

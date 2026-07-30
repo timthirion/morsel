@@ -174,6 +174,42 @@ fn algorithms() -> Vec<Probe> {
                 check_mesh(&m)
             })
         }),
+        ("remesh:anisotropic", |m| {
+            run(|| {
+                let mut m = m.clone();
+                let target = remesh::average_edge_length(&m);
+                // Until July 2026 this could not be swept at all: its split pass had no
+                // bound and would add one vertex per pass forever on some inputs.
+                let report = remesh::anisotropic_remesh(
+                    &mut m,
+                    &remesh::AnisotropicOptions::new(0.5 * target, 2.0 * target),
+                );
+                check_mesh(&m)?;
+                if !report.converged {
+                    return Err(format!(
+                        "did not converge, stopped after {} iteration(s)",
+                        report.iterations_run
+                    ));
+                }
+                Ok(())
+            })
+        }),
+        ("remesh:cvt", |m| {
+            run(|| {
+                let mut m = m.clone();
+                // Two thirds of the input count: at or above it every Voronoi cell holds
+                // one vertex and Lloyd's iteration is a no-op by construction.
+                let target = (m.num_vertices() * 2 / 3).max(3);
+                remesh::cvt_remesh(
+                    &mut m,
+                    &remesh::CvtOptions {
+                        target_vertices: Some(target),
+                        ..Default::default()
+                    },
+                );
+                check_mesh(&m)
+            })
+        }),
         ("curvature:gaussian", |m| {
             run(|| check_field(&curvature::gaussian_curvature(m), "gaussian"))
         }),
