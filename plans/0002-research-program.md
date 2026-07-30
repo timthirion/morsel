@@ -316,9 +316,24 @@ compare numerically. Cheap to design in now, painful to retrofit.
       rule. Numerical threshold work (scale-relative epsilons in the heat method
       and OMT) deliberately left alone — refusing is a safe failure and epsilon
       tuning is a rabbit hole.
-- [ ] Mesh `repair` and a seam/cut generator — without them
-      `morsel parameterize examples/stanford-bunny.obj -m omt` fails, because
-      every bundled example is closed and LSCM/ARAP/OMT all need boundary.
+- [x] A seam/cut generator (`src/algo/cut.rs`, July 2026). Joins boundary loops
+      along the shortest path between them and slits closed surfaces open, so
+      `morsel parameterize examples/stanford-bunny.obj -m omt --cut` now works
+      where it used to be refused. Genus > 0 and disconnected input are refused by
+      name. The surgery runs in face-vertex space and rebuilds through
+      `build_from_triangles`, so a botched cut is rejected rather than producing a
+      corrupt half-edge mesh — which is only affordable because that validation
+      landed first.
+
+      The bug worth remembering: the fan circulator advances by `next(twin(h))`,
+      and `face_of(twin(h)) == face_of(next(twin(h)))`, so the face *between* rays
+      `k` and `k+1` is `face_of(twin(hᵏ))`, not `face_of(hᵏ)`. Getting that index
+      off by one — together with choosing each vertex's side independently rather
+      than orienting by the path direction — assigned faces across the cut. The
+      symptom was not local: the cylinder came back with 13 boundary loops and the
+      bunny and sphere with bowtie vertices. Neither pointed at the fan.
+- [ ] Mesh `repair` — dropping unreferenced vertices, which currently make a mesh
+      count as disconnected and so block cutting.
 - [ ] Expose `geodesic` and the CVT/anisotropic remeshers in the CLI (~3,400
       lines of working code currently unreachable).
 

@@ -35,9 +35,9 @@ morsel-view examples/torus.obj --curvature gaussian --screenshot out.png
 
 **Right — UV parameterization,** shown with a test grid texture. The ragged seam down
 the bunny's left side is where cylindrical projection wraps at `atan2`'s branch cut,
-and is exactly the artefact a conformal method avoids — though LSCM and ARAP need
-disk topology, which this mesh does not have: it has four boundary loops around the
-base.
+and is exactly the artefact a conformal method avoids. LSCM and ARAP need disk
+topology, which this mesh does not have — it has four boundary loops around the base
+— so reaching them means cutting it open first, with `--cut`.
 
 ```sh
 morsel-view examples/stanford-bunny.obj --texture images/UV.png --screenshot out.png
@@ -153,8 +153,11 @@ morsel parameterize patch.obj patch_uv.obj --method lscm
 # Area-preserving: LSCM followed by an optimal-mass-transport correction
 morsel parameterize patch.obj patch_uv.obj --method omt
 
-# Closed meshes have no boundary; only cylindrical projection applies
-morsel parameterize sphere.obj sphere_uv.obj --method cylindrical
+# Cut a non-disk mesh open first, and flatten in one step
+morsel parameterize sphere.obj sphere_uv.obj --method lscm --cut
+
+# Or cut on its own, to inspect the seams
+morsel cut examples/stanford-bunny.obj bunny_cut.obj
 ```
 
 ```sh
@@ -165,10 +168,19 @@ morsel geodesic examples/spherical-cap.obj --source 0 --method dijkstra
 
 `lscm`, `arap` and `omt` require **disk topology** — exactly one boundary loop. A
 closed mesh has none and an annulus has two, and both are refused by name rather
-than silently producing a degenerate map. Cutting a mesh to satisfy that is not
-implemented yet, so of the bundled examples only `spherical-cap.obj` qualifies.
+than silently producing a degenerate map. `--cut` gets there first: `cut` joins
+boundary loops along the shortest path between them, and slits a closed surface
+open, so the sphere, the cylinder and the bunny all become flattenable. It refuses
+genus > 0 — a torus needs handle loops that no shortest path between boundaries will
+find — and refuses disconnected input, since the genus is a sum over components.
 `omt` reports area distortion before and after, so the correction it applies is
 visible.
+
+Cutting is pure surgery: it duplicates vertices along the seam and rewires face
+corners, leaving every face and every position exactly where it was. It is the seam
+*placement* that is unambitious — a shortest path is short, not well placed, and a
+short slit on a sphere leaves a lot of distortion behind (LSCM's worst area ratio on
+the cut sphere is 8.1). Choosing seams to minimise distortion is a separate problem.
 
 `geodesic` defaults to the heat method, which measures distance across faces.
 `--method dijkstra` walks the edge graph instead and can only overestimate — by 15%

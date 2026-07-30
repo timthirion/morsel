@@ -128,6 +128,21 @@ enum Commands {
         /// Optional material/texture name for the MTL reference
         #[arg(long)]
         material: Option<String>,
+
+        /// Cut the mesh to disk topology first, so that methods
+        /// requiring boundary work on closed or multi-hole meshes.
+        /// The written mesh is the cut one, since the UVs index it.
+        #[arg(long)]
+        cut: bool,
+    },
+
+    /// Cut a mesh open until it has one boundary loop (disk topology)
+    Cut {
+        /// Input mesh file
+        input: PathBuf,
+
+        /// Output mesh file
+        output: PathBuf,
     },
 
     /// Compute geodesic distances from a source vertex
@@ -299,8 +314,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             method,
             material,
+            cut,
         } => {
-            cmd_parameterize(&input, &output, method, material.as_deref())?;
+            cmd_parameterize(&input, &output, method, material.as_deref(), cut)?;
+        }
+
+        Commands::Cut { input, output } => {
+            cmd_cut(&input, &output)?;
         }
 
         Commands::Geodesic {
@@ -824,37 +844,73 @@ fn cmd_remesh(
     Ok(())
 }
 
+fn cmd_cut(input: &PathBuf, output: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let mesh: HalfEdgeMesh = io::load(input)?;
+    println!(
+        "Loaded: {} vertices, {} faces, {} boundary loop(s), genus {}",
+        mesh.num_vertices(),
+        mesh.num_faces(),
+        mesh.boundary_loop_count(),
+        match mesh.genus() {
+            Some(g) => g.to_string(),
+            None => "undefined (disconnected)".to_string(),
+        }
+    );
+
+    let start = Instant::now();
+    let (cut, report) = morsel::algo::cut::cut_to_disk(&mesh)?;
+    println!("Cut in {:.2?}", start.elapsed());
+    println!(
+        "  boundary loops: {} -> {}",
+        report.loops_before, report.loops_after
+    );
+    println!("  paths cut:      {}", report.paths_cut);
+    println!("  vertices added: {}", report.vertices_added);
+
+    io::save(&cut, output)?;
+    println!("Wrote {}", output.display());
+    Ok(())
+}
+
 fn cmd_parameterize(
     input: &PathBuf,
     output: &PathBuf,
     method: ParameterizeMethod,
     material: Option<&str>,
+    cut: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use morsel::io::obj as obj_io;
 
-    let mesh: HalfEdgeMesh = io::load(input)?;
+    let mut mesh: HalfEdgeMesh = io::load(input)?;
     println!(
         "Loaded: {} vertices, {} faces",
         mesh.num_vertices(),
         mesh.num_faces()
     );
 
-    // Every method except cylindrical projection solves over a UV domain
-    // pinned to the boundary, so a closed mesh has to be cut first.
+    // Every method except cylindrical projection solves over a UV domain pinned to the
+    // boundary, and needs exactly one boundary loop. Counting boundary *vertices* is
+    // not the same test: the bunny has hundreds of them spread over four holes.
     if method.requires_boundary() {
-        let boundary_count = mesh
-            .vertex_ids()
-            .filter(|&v| mesh.is_boundary_vertex(v))
-            .count();
-        if boundary_count == 0 {
-            return Err(
-                "Mesh has no boundary; this method requires disk topology (open mesh). \
-                        Cut the mesh first, or use `--method cylindrical`."
-                    .into(),
+        let loops = mesh.boundary_loop_count();
+        println!("Boundary loops: {}", loops);
+        if loops != 1 {
+            if !cut {
+                return Err(format!(
+                    "Mesh has {loops} boundary loops; this method needs exactly one (disk \
+                     topology). Pass --cut to cut it open, or use `--method cylindrical`."
+                )
+                .into());
+            }
+            let (opened, report) = morsel::algo::cut::cut_to_disk(&mesh)?;
+            println!(
+                "Cut along {} path(s), duplicating {} vertices -> {} boundary loop",
+                report.paths_cut, report.vertices_added, report.loops_after
             );
+            mesh = opened;
         }
-        println!("Boundary vertices: {}", boundary_count);
     }
+    let mesh = mesh;
 
     let start = Instant::now();
     let uvs = match method {

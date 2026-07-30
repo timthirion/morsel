@@ -46,7 +46,7 @@ pub struct LSCMOptions {
     /// `‖r‖ / ‖b‖`.
     ///
     /// Pins are imposed by eliminating their degrees of freedom (see
-    /// [`reduce_pinned_dofs`]), so both the matrix and `‖b‖` are on the scale of
+    /// `reduce_pinned_dofs`), so both the matrix and `‖b‖` are on the scale of
     /// the conformal energy itself and this value means what it appears to mean.
     /// An earlier penalty formulation coupled the two: it inflated `‖b‖` to
     /// `λ · pin_target`, so a `1e-8` relative tolerance left an absolute
@@ -351,7 +351,7 @@ fn select_farthest_boundary_pair(
 /// plane (translation, rotation, scale: a four-dimensional kernel), which is
 /// exactly what pinning two vertices removes.
 ///
-/// The pins are *not* applied here. See [`reduce_pinned_dofs`].
+/// The pins are *not* applied here. See `reduce_pinned_dofs`.
 ///
 /// Indexing: DOF `i` is `u` of vertex `i`, DOF `n + i` is `v` of vertex `i`.
 fn build_conformal_normal_equations(

@@ -295,6 +295,36 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
         false
     }
 
+    /// The boundary loops, each as the sequence of vertices along it.
+    ///
+    /// Vertices come in the order the loop is traversed, so consecutive entries are
+    /// joined by a boundary edge and the last is joined back to the first. Returns an
+    /// empty vector for a closed mesh.
+    pub fn boundary_loops(&self) -> Vec<Vec<VertexId<I>>> {
+        let mut visited = vec![false; self.num_halfedges()];
+        let mut loops = Vec::new();
+
+        for he in self.halfedge_ids() {
+            if visited[he.index()] || !self.is_boundary_halfedge(he) {
+                continue;
+            }
+
+            let mut loop_vertices = Vec::new();
+            let mut cur = he;
+            loop {
+                visited[cur.index()] = true;
+                loop_vertices.push(self.origin(cur));
+                cur = self.next(cur);
+                if cur == he || visited[cur.index()] {
+                    break;
+                }
+            }
+            loops.push(loop_vertices);
+        }
+
+        loops
+    }
+
     /// Count the boundary loops (holes) of the mesh.
     ///
     /// `0` means closed. `1` means disk topology, which is what the
@@ -305,25 +335,24 @@ impl<I: MeshIndex> HalfEdgeMesh<I> {
     /// torus both have `χ = 0`, but the annulus has two boundary loops and the
     /// torus none.
     pub fn boundary_loop_count(&self) -> usize {
-        let mut visited = vec![false; self.num_halfedges()];
-        let mut loops = 0;
+        self.boundary_loops().len()
+    }
 
-        for he in self.halfedge_ids() {
-            if visited[he.index()] || !self.is_boundary_halfedge(he) {
-                continue;
-            }
-            loops += 1;
-            let mut cur = he;
-            loop {
-                visited[cur.index()] = true;
-                cur = self.next(cur);
-                if cur == he || visited[cur.index()] {
-                    break;
-                }
-            }
+    /// The genus, from Euler's formula `χ = 2 − 2g − b`.
+    ///
+    /// Returns `None` when the mesh is disconnected, where that formula does not
+    /// apply — `χ` then sums over components and cannot be inverted for a single
+    /// genus.
+    pub fn genus(&self) -> Option<usize> {
+        let v = self.num_vertices() as isize;
+        let e = (self.num_halfedges() / 2) as isize;
+        let f = self.num_faces() as isize;
+        let b = self.boundary_loop_count() as isize;
+        let twice_genus = 2 - (v - e + f) - b;
+        if twice_genus < 0 || twice_genus % 2 != 0 {
+            return None;
         }
-
-        loops
+        Some((twice_genus / 2) as usize)
     }
 
     /// Check if an edge (represented by one of its half-edges) is on the boundary.

@@ -4,16 +4,19 @@
 //!
 //! - **Smoothing**: Laplacian smoothing, bilateral smoothing, mean curvature flow
 //! - **Remeshing**: Isotropic remeshing, anisotropic remeshing
-//! - **Decimation**: Edge collapse, vertex clustering, quadric error metrics
+//! - **Decimation**: Edge collapse driven by quadric error metrics
 //! - **Subdivision**: Loop subdivision, Catmull-Clark subdivision
-//! - **Parameterization**: LSCM, ARAP, conformal maps
-//! - **Geodesics**: Dijkstra, heat method, exact polyhedral
+//! - **Parameterization**: cylindrical projection, LSCM, ARAP, optimal mass transport
+//! - **Cutting**: cutting a surface to disk topology, which parameterization needs
+//! - **Geodesics**: Dijkstra, heat method
 //! - **Curvature**: Discrete curvature estimation
-//! - **Repair**: Non-manifold repair, hole filling
 //!
-//! Algorithms are added incrementally as the library develops.
+//! Algorithms are added incrementally as the library develops. Vertex clustering,
+//! exact polyhedral geodesics, and repair (non-manifold repair, hole filling) are
+//! not implemented.
 
 pub mod curvature;
+pub mod cut;
 pub mod decimate;
 pub mod geodesic;
 pub mod parameterize;

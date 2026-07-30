@@ -80,8 +80,10 @@ direction, not because they've been decided.
   Converged quality already improves with refinement — 15.7% of conformal at 1089
   vertices — so this is purely about making that budget affordable.
 - **Parameterization quality** — boundary vertices that slide along the boundary
-  curve rather than being pinned or freed; a seam/cut generator so closed meshes
-  can be unwrapped at all.
+  curve rather than being pinned or freed; better *seam placement*. The cut
+  generator exists now, but a shortest path is short, not well placed: a short slit
+  on a sphere still leaves LSCM with a worst area ratio of 8.1. Placing seams to
+  minimise distortion is the open part.
 - **Measurement harness** — Hausdorff and triangle-quality metrics as first-class
   reportable numbers, so decimation and remeshing claims are defensible the way
   the parameterization ones now are.

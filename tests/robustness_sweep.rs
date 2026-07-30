@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use common::{corpus, field_defect, structural_defect, Difficulty};
-use morsel::algo::{curvature, decimate, geodesic, parameterize, remesh, smooth, subdivide};
+use morsel::algo::{curvature, cut, decimate, geodesic, parameterize, remesh, smooth, subdivide};
 use morsel::mesh::{HalfEdgeMesh, VertexId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -247,6 +247,23 @@ fn algorithms() -> Vec<Probe> {
                 check_field(&vals, "uv")
             })
         }),
+        ("cut:to_disk", |m| {
+            run(|| {
+                // Cutting rebuilds through `build_from_triangles`, so a botched cut
+                // surfaces here as `Refused` rather than as a corrupt mesh. What this
+                // probe is really watching for is the reverse: a cut that reports
+                // success while leaving the mesh un-flattenable.
+                let (cut, report) = cut::cut_to_disk(m).map_err(|e| e.to_string())?;
+                check_mesh(&cut)?;
+                if !report.is_disk() {
+                    return Err(format!(
+                        "reported success with {} boundary loops",
+                        report.loops_after
+                    ));
+                }
+                Ok(())
+            })
+        }),
     ]
 }
 
@@ -310,6 +327,12 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     ("two_components", "param:arap", Outcome::Refused),
     ("two_components", "param:lscm", Outcome::Refused),
     ("two_components", "param:omt", Outcome::Refused),
+    // Cutting reads the genus, which Euler's formula only gives per component, so
+    // a disconnected mesh has to be separated first. An isolated vertex counts as
+    // its own component, which is why `unreferenced_vertex` lands here too — a
+    // `repair` pass dropping unused vertices would clear that one.
+    ("two_components", "cut:to_disk", Outcome::Refused),
+    ("unreferenced_vertex", "cut:to_disk", Outcome::Refused),
     // Absolute rather than scale-relative thresholds. Left alone deliberately:
     // epsilon tuning is a rabbit hole and refusing is a safe failure.
     ("tiny_scale", "param:omt", Outcome::Refused),
