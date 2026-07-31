@@ -11,6 +11,8 @@
 //! - **Geodesics**: Dijkstra, heat method
 //! - **Curvature**: Discrete curvature estimation
 //! - **Quality**: Triangle-quality measurement, for checking the claims the others make
+//! - **Distance**: point-to-surface queries and Hausdorff distance, for checking that a
+//!   mesh is still the same *shape* after being processed
 //!
 //! Algorithms are added incrementally as the library develops. Vertex clustering,
 //! exact polyhedral geodesics, and repair (non-manifold repair, hole filling) are
@@ -19,6 +21,7 @@
 pub mod curvature;
 pub mod cut;
 pub mod decimate;
+pub mod distance;
 pub mod geodesic;
 pub mod parameterize;
 pub mod progress;

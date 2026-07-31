@@ -449,9 +449,19 @@ const BASELINE: &[(&str, &str, Outcome)] = &[
     // CVT's retriangulation builds a dual over the relaxed seeds, and that dual is not
     // manifold for every seed placement. When it is rejected the input comes back
     // unchanged, which used to be indistinguishable from "already optimal".
-    ("sliver_triangles", "remesh:cvt", Outcome::Refused),
+    //
+    // Which meshes land here shifted in July 2026, when CVT's private brute-force projection
+    // was replaced by the shared one in `algo::distance`. The old one returned the *centroid*
+    // of a degenerate triangle instead of the nearest point on it, so on a corpus full of
+    // slivers and zero-area faces the seeds land differently, and so does the dual built over
+    // them. `sliver_triangles` now succeeds where it used to be refused; `tiny_scale` and
+    // `zero_area_face` went the other way. Stable across eight runs — this is a different
+    // answer, not a flakier one, and it follows from a more correct projection on exactly the
+    // inputs where the old one was wrong.
+    ("tiny_scale", "remesh:cvt", Outcome::Refused),
     ("two_components", "remesh:cvt", Outcome::Refused),
     ("unreferenced_vertex", "remesh:cvt", Outcome::Refused),
+    ("zero_area_face", "remesh:cvt", Outcome::Refused),
     // QEM decimation. Pinnable again as of July 2026: its candidate heap ordered
     // collapses on cost alone, so ties were broken by the order candidates were pushed,
     // which came from `HashSet` iteration. `control_grid` produced four distinct meshes

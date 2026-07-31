@@ -281,54 +281,121 @@ fn cvt_remeshing_needs_a_target_below_the_vertex_count() {
     );
 }
 
-/// **Recorded defect.** None of the three remeshers project their smoothed vertices
-/// back onto the input surface, so all of them shrink it. `examples/sphere.obj` has
-/// radius 0.5 to within `1e-6`, which makes the drift directly measurable, and
-/// anisotropic remeshing is the worst offender by an order of magnitude — every one of
-/// its vertices ends up inside the sphere.
+/// **Fixed defect, and a correction to how it was described.**
 ///
-/// This is why quality numbers alone cannot settle a remeshing claim.
+/// Anisotropic remeshing was shrinking the surface badly: on `examples/sphere.obj`, radius
+/// 0.5, every one of its vertices ended up inside the sphere, as much as 14.8% of the radius
+/// inward. It projects smoothed vertices, split midpoints and collapse targets back onto the
+/// input surface now, and lands at 2.7%.
+///
+/// The correction is what 2.7% *means*. The earlier version of this test recorded isotropic
+/// remeshing as drifting 2.7% too and called that shrinkage. It is not: a polyhedral sphere's
+/// faces are chords, so its surface dips inside the true sphere by the sagitta, and any vertex
+/// placed on that surface inherits the same deviation. Measured directly by projecting points
+/// of the true sphere onto the input mesh, that floor is about 2.4%. Isotropic was sitting on
+/// it, not drifting past it, and neither it nor CVT was ever shrinking the mesh.
+///
+/// So the test calibrates the floor from the input rather than hard-coding a number, and
+/// asserts that no remesher drifts materially past it.
 #[test]
-fn remeshing_drifts_off_a_sphere_of_known_radius() {
+fn no_remesher_drifts_past_the_input_surface() {
+    use morsel::algo::distance::SurfaceIndex;
+    use morsel::algo::remesh::{anisotropic_remesh, cvt_remesh, AnisotropicOptions, CvtOptions};
+    use nalgebra::Point3;
+
     let mesh = load("sphere");
     let radius = 0.5;
-    let drift = |m: &HalfEdgeMesh| {
+    let target = average_edge_length(&mesh);
+
+    let worst_vertex_drift = |m: &HalfEdgeMesh| {
         m.vertex_ids()
             .map(|v| (m.position(v).coords.norm() - radius).abs() / radius)
             .fold(0.0_f64, f64::max)
     };
-    assert!(drift(&mesh) < 1e-5, "the input is not a unit-radius sphere");
 
-    let target = average_edge_length(&mesh);
-
-    let mut iso = mesh.clone();
-    let _ = isotropic_remesh(&mut iso, &RemeshOptions::with_target_length(target));
-    let iso_drift = drift(&iso);
-
-    let mut cvt = mesh.clone();
-    let _ = cvt_remesh(
-        &mut cvt,
-        &CvtOptions {
-            target_vertices: Some(120),
-            ..Default::default()
-        },
+    // The floor: the deepest the input mesh's own surface dips inside the true sphere. Any
+    // vertex lying on that surface is at least this far off the true sphere, so no amount of
+    // projection can do better.
+    let index = SurfaceIndex::new(&mesh);
+    let mut floor = 0.0_f64;
+    for i in 0..400 {
+        let a = i as f64 * 0.37;
+        let dir = Point3::new(a.sin() * a.cos(), a.sin() * a.sin(), a.cos());
+        let on_sphere = Point3::from(dir.coords.normalize() * radius);
+        let projected = index.project(&on_sphere);
+        floor = floor.max((projected.coords.norm() - radius).abs() / radius);
+    }
+    assert!(
+        floor > 0.01 && floor < 0.05,
+        "the calibration itself looks wrong: floor {floor:.4}"
     );
-    let cvt_drift = drift(&cvt);
 
-    let mut aniso = mesh.clone();
+    for (label, remeshed) in [
+        ("isotropic", {
+            let mut m = mesh.clone();
+            let _ = isotropic_remesh(&mut m, &RemeshOptions::with_target_length(target));
+            m
+        }),
+        ("anisotropic", {
+            let mut m = mesh.clone();
+            let _ =
+                anisotropic_remesh(&mut m, &AnisotropicOptions::new(0.5 * target, 2.0 * target));
+            m
+        }),
+        ("cvt", {
+            let mut m = mesh.clone();
+            let _ = cvt_remesh(
+                &mut m,
+                &CvtOptions {
+                    target_vertices: Some(120),
+                    ..Default::default()
+                },
+            );
+            m
+        }),
+    ] {
+        let drift = worst_vertex_drift(&remeshed);
+        assert!(
+            drift < floor * 1.15,
+            "{label} drifted {:.4} against a floor of {:.4}",
+            drift,
+            floor
+        );
+    }
+}
+
+/// The other half of the same finding: turning projection off puts anisotropic remeshing
+/// back where it was, several times past the faceting floor. Without this, the assertion
+/// above could pass for a reason unrelated to projection.
+#[test]
+fn without_projection_anisotropic_shrinks_the_sphere() {
+    use morsel::algo::remesh::{anisotropic_remesh, AnisotropicOptions};
+
+    let mesh = load("sphere");
+    let radius = 0.5;
+    let target = average_edge_length(&mesh);
+    let worst = |m: &HalfEdgeMesh| {
+        m.vertex_ids()
+            .map(|v| (m.position(v).coords.norm() - radius).abs() / radius)
+            .fold(0.0_f64, f64::max)
+    };
+
+    let mut with = mesh.clone();
     let _ = anisotropic_remesh(
-        &mut aniso,
+        &mut with,
         &AnisotropicOptions::new(0.5 * target, 2.0 * target),
     );
-    let aniso_drift = drift(&aniso);
 
-    // Bounds recorded from measurement, loose enough to absorb run-to-run variation but
-    // tight enough that a projection step being added would break them.
-    assert!(iso_drift < 0.05, "isotropic drift {iso_drift:.4}");
-    assert!(cvt_drift < 0.05, "cvt drift {cvt_drift:.4}");
+    let mut without = mesh.clone();
+    let _ = anisotropic_remesh(
+        &mut without,
+        &AnisotropicOptions::new(0.5 * target, 2.0 * target).with_project_to_surface(false),
+    );
+
     assert!(
-        aniso_drift > 0.05,
-        "anisotropic drift {aniso_drift:.4}: the recorded shrinkage is much larger than \
-         the others, so if this now passes the projection was fixed"
+        worst(&without) > 4.0 * worst(&with),
+        "projection should make a large difference here: {:.4} without, {:.4} with",
+        worst(&without),
+        worst(&with)
     );
 }

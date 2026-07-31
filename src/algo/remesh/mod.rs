@@ -29,9 +29,16 @@
 //!   about one vertex, whose centroid is that vertex, and Lloyd's iteration has nothing
 //!   to move.
 //!
-//! And one caveat that applies to all three: none of them projects its smoothed vertices
-//! back onto the input surface, so all of them shrink it. On a sphere of radius 0.5 the
-//! drift is 2.7% for isotropic, 1.2% for CVT, and 15% for anisotropic.
+//! All three snap vertices back onto the input surface by default, which is what keeps them
+//! from shrinking it — see `project_to_surface` on the options, and `tangential_smooth` for
+//! why smoothing drifts inward without it.
+//!
+//! Anisotropic remeshing was the one that needed this: on a sphere of radius 0.5 it used to
+//! put every vertex inside the sphere, as much as 15% of the radius in. It now lands at 2.7%,
+//! which is the floor rather than a residue — a polyhedral sphere's faces are chords, so its
+//! surface dips inside the true sphere by the sagitta, and a vertex placed anywhere on that
+//! surface inherits the same deviation. Isotropic (2.7%) and CVT (1.2%) were already at or
+//! below that floor and were never shrinking anything.
 //!
 //! # Isotropic Remeshing
 //!
@@ -97,6 +104,7 @@ use std::collections::{HashMap, HashSet};
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
+use crate::algo::distance::SurfaceIndex;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
 
 /// What a remeshing pass did.
@@ -895,6 +903,17 @@ pub(crate) fn flip_edge(faces: &mut [[usize; 3]], v0: usize, v1: usize) -> bool 
 
 /// Apply tangential smoothing to regularize vertex positions.
 ///
+/// When `project_onto` is given, each smoothed vertex is snapped back to the closest point
+/// of that surface. Pass an index built from the mesh as it was *before* remeshing began.
+///
+/// This is what stops remeshing from shrinking the input. Smoothing moves each vertex
+/// toward the centroid of its neighbours, and on a curved surface that centroid lies on the
+/// concave side — so every pass pulls the surface inward a little. Projecting the tangential
+/// displacement onto the tangent plane, which this already did, removes the first-order part
+/// of that drift but not the second-order part, and it accumulates: on a sphere of radius
+/// 0.5, isotropic remeshing drifted 2.7% inward and anisotropic 15%, with every one of its
+/// vertices ending up inside the sphere.
+///
 /// Returns whether the pass ran to completion. Only positions change here, so the
 /// rebuild is rejected only if the connectivity was already unrepresentable — but
 /// reporting it costs nothing and keeps the caller's convergence flag honest.
@@ -903,6 +922,7 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
     lambda: f64,
     preserve_boundary: bool,
     parallel: bool,
+    project_onto: Option<&SurfaceIndex>,
 ) -> bool {
     let (vertices, faces) = to_face_vertex(mesh);
 
@@ -931,7 +951,14 @@ pub(crate) fn tangential_smooth<I: MeshIndex>(
         let normal = &normals[idx];
         let tangent_displacement = displacement - normal.dot(&displacement) * normal;
 
-        Point3::from(pos.coords + lambda * tangent_displacement)
+        let moved = Point3::from(pos.coords + lambda * tangent_displacement);
+        match project_onto {
+            // Boundary vertices are left alone above when `preserve_boundary` is set; when it
+            // is not, projecting them onto the surface is still right, since the surface
+            // includes its own boundary.
+            Some(index) => index.project(&moved),
+            None => moved,
+        }
     };
 
     let new_positions: Vec<Point3<f64>> = if parallel {

@@ -264,9 +264,23 @@ three that reliably improves quality, and `tests/remesh_quality.rs` measures all
 them against [`src/algo/quality.rs`](src/algo/quality.rs) to say so. `anisotropic`
 improves the *mean* everywhere but takes the cylinder's worst angle from 43.7° down to
 about 10°, and `cvt` needs `--target-vertices` below the input count or Lloyd's
-iteration has nothing to move. None of the three projects vertices back onto the input
-surface, so all of them shrink it — by 2.7%, 1.2% and 15% respectively on a sphere of
-radius 0.5.
+iteration has nothing to move.
+
+`remesh` and `decimate` also report the **Hausdorff distance** to their input, which is the
+other half of any claim they make: triangle quality says the result is well shaped, and this
+says it is still the same shape. `morsel distance a.obj b.obj` measures it on its own.
+
+```sh
+# Decimating the bunny to a quarter of its faces moves the surface 5.3%
+morsel distance examples/stanford-bunny.obj decimated.obj
+```
+
+Vertices are snapped back onto the input surface as remeshing proceeds, which is what stops
+it shrinking the mesh. Anisotropic remeshing needed that badly — it used to put every vertex
+of a sphere *inside* the sphere, up to 15% of the radius in. Isotropic and CVT turned out
+never to have been shrinking anything: their 2.7% and 1.2% figures are the input mesh's own
+faceting, since a polyhedral sphere's faces are chords that dip inside the true sphere by the
+sagitta, and any vertex placed on that surface inherits the deviation.
 
 That reporting is worth having, and it earned its keep immediately. It caught isotropic
 remeshing emitting a triangle with a `5.5e-8°` angle on the bunny while posting its best

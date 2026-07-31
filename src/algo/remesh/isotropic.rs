@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::Point3;
 
+use crate::algo::distance::SurfaceIndex;
 use crate::algo::remesh::RemeshReport;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
@@ -34,6 +35,14 @@ pub struct RemeshOptions {
 
     /// Whether to use parallel execution (default: true).
     pub parallel: bool,
+
+    /// Snap smoothed vertices back onto the input surface (default: true).
+    ///
+    /// Without this, remeshing shrinks the mesh: smoothing pulls each vertex toward the
+    /// centroid of its neighbours, which on a curved surface lies on the concave side, and
+    /// the drift accumulates over passes. On a sphere of radius 0.5 it reached 2.7%. Turn it
+    /// off only if the input geometry is not the shape you want to keep.
+    pub project_to_surface: bool,
 }
 
 impl RemeshOptions {
@@ -46,6 +55,7 @@ impl RemeshOptions {
             smoothing_iterations: 3,
             smoothing_lambda: 0.5,
             parallel: true,
+            project_to_surface: true,
         }
     }
 
@@ -70,6 +80,12 @@ impl RemeshOptions {
     /// Set whether to use parallel execution.
     pub fn with_parallel(mut self, parallel: bool) -> Self {
         self.parallel = parallel;
+        self
+    }
+
+    /// Set whether smoothed vertices are snapped back onto the input surface.
+    pub fn with_project_to_surface(mut self, project: bool) -> Self {
+        self.project_to_surface = project;
         self
     }
 
@@ -132,6 +148,11 @@ fn isotropic_remesh_internal<I: MeshIndex>(
     let high = options.target_length * 4.0 / 3.0;
     let low = options.target_length * 4.0 / 5.0;
 
+    // Built from the input, once, and queried by every smoothing pass. Rebuilding it as the
+    // mesh changes would defeat the point: the reference has to be the shape the caller
+    // handed us, not the drifted one.
+    let reference = options.project_to_surface.then(|| SurfaceIndex::new(mesh));
+
     // 4 sub-steps per iteration for more granular progress
     let total_steps = options.iterations * 4;
 
@@ -149,6 +170,7 @@ fn isotropic_remesh_internal<I: MeshIndex>(
             progress,
             base_step,
             total_steps,
+            reference.as_ref(),
         );
 
         // Step 2: Collapse short edges (with sub-progress)
@@ -160,6 +182,7 @@ fn isotropic_remesh_internal<I: MeshIndex>(
             progress,
             base_step + 1,
             total_steps,
+            reference.as_ref(),
         );
 
         #[cfg(debug_assertions)]
@@ -185,6 +208,7 @@ fn isotropic_remesh_internal<I: MeshIndex>(
                 options.smoothing_lambda,
                 options.preserve_boundary,
                 options.parallel,
+                reference.as_ref(),
             );
         }
 
@@ -257,6 +281,7 @@ fn min_angle_of(p: &Point3<f64>, q: &Point3<f64>, r: &Point3<f64>) -> f64 {
 /// Uses batch processing: collect all long edges, split them simultaneously.
 /// Returns whether the pass ran to completion; `false` means the mesh it produced was
 /// rejected by [`build_from_triangles`], so the mesh is left as it was.
+#[allow(clippy::too_many_arguments)] // thresholds, progress plumbing, and the projection reference
 fn split_long_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     threshold: f64,
@@ -264,6 +289,7 @@ fn split_long_edges_with_progress<I: MeshIndex>(
     progress: Option<&Progress>,
     step: usize,
     total_steps: usize,
+    project_onto: Option<&SurfaceIndex>,
 ) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
     let threshold_sq = threshold * threshold;
@@ -398,9 +424,18 @@ fn split_long_edges_with_progress<I: MeshIndex>(
         let mut edge_midpoints: std::collections::HashMap<(usize, usize), usize> =
             std::collections::HashMap::new();
 
-        // Pre-allocate midpoints for all long edges
+        // Pre-allocate midpoints for all long edges.
+        //
+        // Projected onto the reference surface when asked. An edge's midpoint lies on the
+        // *chord*, which on a curved surface is inside it by the sagitta, so refining a
+        // sphere without projecting walks the mesh steadily inward. This is where most of
+        // isotropic remeshing's shrinkage came from — projecting only the smoothing pass
+        // moved its drift on a sphere from 2.72% to 2.70%, which is to say not at all.
         for ((v0, v1), _) in &long_edges {
-            let mid = Point3::from((vertices[*v0].coords + vertices[*v1].coords) * 0.5);
+            let mut mid = Point3::from((vertices[*v0].coords + vertices[*v1].coords) * 0.5);
+            if let Some(index) = project_onto {
+                mid = index.project(&mid);
+            }
             let mid_idx = vertices.len();
             vertices.push(mid);
             edge_midpoints.insert((*v0, *v1), mid_idx);
@@ -517,6 +552,7 @@ fn split_long_edges_with_progress<I: MeshIndex>(
 /// (no shared vertices), and collapses them all at once before rebuilding topology.
 /// Returns whether the pass ran to completion. See
 /// [`split_long_edges_with_progress`].
+#[allow(clippy::too_many_arguments)] // thresholds, progress plumbing, and the projection reference
 fn collapse_short_edges_with_progress<I: MeshIndex>(
     mesh: &mut HalfEdgeMesh<I>,
     low_threshold: f64,
@@ -525,6 +561,7 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
     progress: Option<&Progress>,
     step: usize,
     total_steps: usize,
+    project_onto: Option<&SurfaceIndex>,
 ) -> bool {
     let (mut vertices, mut faces) = to_face_vertex(mesh);
 
@@ -613,9 +650,14 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
             break;
         }
 
-        // Batch collapse all selected edges
+        // Batch collapse all selected edges. `collapse_edge` puts the survivor at the edge
+        // midpoint, which is on the chord and so inside a curved surface; project it back for
+        // the same reason the split midpoints are projected.
         for (v0, v1) in &edges_to_collapse {
             collapse_edge(&mut vertices, &mut faces, *v0, *v1);
+            if let Some(index) = project_onto {
+                vertices[*v0] = index.project(&vertices[*v0]);
+            }
         }
         _total_collapses += edges_to_collapse.len();
 
@@ -910,16 +952,16 @@ mod tests {
         let high = target * 4.0 / 3.0;
         let low = target * 4.0 / 5.0;
 
-        split_long_edges_with_progress(&mut mesh, high, true, None, 0, 4);
+        split_long_edges_with_progress(&mut mesh, high, true, None, 0, 4, None);
         assert!(mesh.is_valid());
 
-        collapse_short_edges_with_progress(&mut mesh, low, high, true, None, 1, 4);
+        collapse_short_edges_with_progress(&mut mesh, low, high, true, None, 1, 4, None);
         assert!(mesh.is_valid());
 
         flip_edges_to_improve_valence(&mut mesh, true);
         assert!(mesh.is_valid());
 
-        tangential_smooth(&mut mesh, 0.5, true, true);
+        tangential_smooth(&mut mesh, 0.5, true, true, None);
         assert!(mesh.is_valid());
     }
 }

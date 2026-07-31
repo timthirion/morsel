@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use crate::algo::distance::SurfaceIndex;
 use crate::algo::remesh::RemeshReport;
 use crate::algo::Progress;
 use crate::mesh::{build_from_triangles, to_face_vertex, HalfEdgeMesh, MeshIndex};
@@ -400,117 +401,16 @@ fn project_points_to_surface(
     faces: &[[usize; 3]],
     points: &[Point3<f64>],
 ) -> Vec<Point3<f64>> {
-    points
-        .iter()
-        .map(|p| project_point_to_surface(vertices, faces, p))
-        .collect()
-}
-
-/// Project a single point onto the nearest triangle of the mesh.
-fn project_point_to_surface(
-    vertices: &[Point3<f64>],
-    faces: &[[usize; 3]],
-    point: &Point3<f64>,
-) -> Point3<f64> {
-    let mut best_proj = *point;
-    let mut best_dist = f64::INFINITY;
-
-    for face in faces {
-        let p0 = &vertices[face[0]];
-        let p1 = &vertices[face[1]];
-        let p2 = &vertices[face[2]];
-
-        let proj = project_point_to_triangle(point, p0, p1, p2);
-        let dist = (proj - point).norm_squared();
-
-        if dist < best_dist {
-            best_dist = dist;
-            best_proj = proj;
-        }
-    }
-
-    best_proj
-}
-
-/// Project a point onto a triangle.
-pub(crate) fn project_point_to_triangle(
-    point: &Point3<f64>,
-    p0: &Point3<f64>,
-    p1: &Point3<f64>,
-    p2: &Point3<f64>,
-) -> Point3<f64> {
-    let e1 = p1 - p0;
-    let e2 = p2 - p0;
-    let normal = e1.cross(&e2);
-    let area2 = normal.norm();
-
-    if area2 < 1e-12 {
-        return Point3::from((p0.coords + p1.coords + p2.coords) / 3.0);
-    }
-
-    let n = normal / area2;
-
-    let v = point - p0;
-    let dist = v.dot(&n);
-    let proj = point - n * dist;
-
-    let v0 = p2 - p0;
-    let v1 = p1 - p0;
-    let v2 = proj - p0;
-
-    let dot00 = v0.dot(&v0);
-    let dot01 = v0.dot(&v1);
-    let dot02 = v0.dot(&v2);
-    let dot11 = v1.dot(&v1);
-    let dot12 = v1.dot(&v2);
-
-    let denom = dot00 * dot11 - dot01 * dot01;
-    if denom.abs() < 1e-12 {
-        return Point3::from((p0.coords + p1.coords + p2.coords) / 3.0);
-    }
-
-    let u = (dot11 * dot02 - dot01 * dot12) / denom;
-    let v = (dot00 * dot12 - dot01 * dot02) / denom;
-
-    if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
-        proj
-    } else {
-        let candidates = [
-            closest_point_on_segment(point, p0, p1),
-            closest_point_on_segment(point, p1, p2),
-            closest_point_on_segment(point, p2, p0),
-        ];
-
-        let mut best = candidates[0];
-        let mut best_dist = (candidates[0] - point).norm_squared();
-
-        for &c in &candidates[1..] {
-            let d = (c - point).norm_squared();
-            if d < best_dist {
-                best_dist = d;
-                best = c;
-            }
-        }
-
-        best
-    }
-}
-
-/// Find closest point on a line segment.
-pub(crate) fn closest_point_on_segment(
-    point: &Point3<f64>,
-    a: &Point3<f64>,
-    b: &Point3<f64>,
-) -> Point3<f64> {
-    let ab = b - a;
-    let len2 = ab.norm_squared();
-
-    if len2 < 1e-12 {
-        return *a;
-    }
-
-    let t = ((point - a).dot(&ab) / len2).clamp(0.0, 1.0);
-    Point3::from(a.coords + ab * t)
+    // One index for all the points, rather than scanning every triangle for each of them.
+    // This was `O(points × faces)`; on the Stanford bunny that is 2503 × 4968 point-triangle
+    // tests per call.
+    let index = SurfaceIndex::from_triangles(
+        faces
+            .iter()
+            .map(|f| [vertices[f[0]], vertices[f[1]], vertices[f[2]]])
+            .collect(),
+    );
+    points.iter().map(|p| index.project(p)).collect()
 }
 
 /// Triangulate seed points on the mesh surface.
@@ -649,20 +549,25 @@ mod tests {
         assert_eq!(assignments[3], 1);
     }
 
+    // CVT's own point-to-triangle projection was replaced by the shared one in
+    // `crate::algo::distance`, which handles degenerate triangles correctly — the old one
+    // returned the centroid of a zero-area triangle rather than the nearest point on it.
+    // These two tests kept their cases and now exercise the shared function.
     #[test]
     fn test_project_point_to_triangle() {
+        use crate::algo::distance::closest_point_on_triangle;
         let p0 = Point3::new(0.0, 0.0, 0.0);
         let p1 = Point3::new(1.0, 0.0, 0.0);
         let p2 = Point3::new(0.0, 1.0, 0.0);
 
         let point = Point3::new(0.25, 0.25, 1.0);
-        let proj = project_point_to_triangle(&point, &p0, &p1, &p2);
+        let proj = closest_point_on_triangle(&point, &p0, &p1, &p2);
         assert!((proj.z - 0.0).abs() < 1e-6);
         assert!((proj.x - 0.25).abs() < 1e-6);
         assert!((proj.y - 0.25).abs() < 1e-6);
 
         let point_outside = Point3::new(-1.0, -1.0, 0.0);
-        let proj_outside = project_point_to_triangle(&point_outside, &p0, &p1, &p2);
+        let proj_outside = closest_point_on_triangle(&point_outside, &p0, &p1, &p2);
         assert!((proj_outside - p0).norm() < 1e-6);
     }
 
@@ -721,22 +626,26 @@ mod tests {
         assert!(mesh.num_vertices() <= original_count);
     }
 
+    /// The segment cases, expressed as a degenerate triangle — which is what a segment is,
+    /// and the case the old implementation got wrong by returning a centroid.
     #[test]
     fn test_closest_point_on_segment() {
+        use crate::algo::distance::closest_point_on_triangle;
         let a = Point3::new(0.0, 0.0, 0.0);
         let b = Point3::new(2.0, 0.0, 0.0);
+        let mid = Point3::new(1.0, 0.0, 0.0);
 
         let p1 = Point3::new(1.0, 1.0, 0.0);
-        let c1 = closest_point_on_segment(&p1, &a, &b);
+        let c1 = closest_point_on_triangle(&p1, &a, &b, &mid);
         assert!((c1.x - 1.0).abs() < 1e-6);
         assert!((c1.y - 0.0).abs() < 1e-6);
 
         let p2 = Point3::new(-1.0, 0.0, 0.0);
-        let c2 = closest_point_on_segment(&p2, &a, &b);
+        let c2 = closest_point_on_triangle(&p2, &a, &b, &mid);
         assert!((c2 - a).norm() < 1e-6);
 
         let p3 = Point3::new(3.0, 0.0, 0.0);
-        let c3 = closest_point_on_segment(&p3, &a, &b);
+        let c3 = closest_point_on_triangle(&p3, &a, &b, &mid);
         assert!((c3 - b).norm() < 1e-6);
     }
 }

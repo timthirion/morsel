@@ -13,7 +13,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use morsel::algo::{
-    curvature, decimate, parameterize, quality, remesh, smooth, subdivide, Progress,
+    curvature, decimate, distance, parameterize, quality, remesh, smooth, subdivide, Progress,
 };
 use morsel::io;
 use morsel::mesh::HalfEdgeMesh;
@@ -143,6 +143,20 @@ enum Commands {
         /// invisible on the textured 3D model.
         #[arg(long, value_name = "FILE")]
         layout: Option<PathBuf>,
+    },
+
+    /// Measure the Hausdorff distance between two meshes
+    Distance {
+        /// First mesh
+        a: PathBuf,
+
+        /// Second mesh
+        b: PathBuf,
+
+        /// Interior sample points per face, in addition to the vertices.
+        /// Zero measures vertices only, which understates the distance.
+        #[arg(long, default_value = "10")]
+        samples_per_face: usize,
     },
 
     /// Report triangle-quality statistics
@@ -356,6 +370,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 cut,
                 layout.as_deref(),
             )?;
+        }
+
+        Commands::Distance {
+            a,
+            b,
+            samples_per_face,
+        } => {
+            cmd_distance(&a, &b, samples_per_face)?;
         }
 
         Commands::Quality { input } => {
@@ -709,6 +731,7 @@ fn cmd_decimate(
 
     let faces_before = mesh.num_faces();
     let requested = faces.unwrap_or_else(|| ((faces_before as f64) * ratio).round() as usize);
+    let original = mesh.clone();
 
     let start = Instant::now();
     let report = decimate::qem_decimate_with_progress(&mut mesh, &options, &progress);
@@ -753,6 +776,7 @@ fn cmd_decimate(
             );
         }
     }
+    report_shape_change(&original, &mesh);
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
@@ -884,6 +908,7 @@ fn cmd_remesh(
     let mode = if sequential { "sequential" } else { "parallel" };
     let progress = create_progress();
     let before = quality::mesh_quality(&mesh);
+    let original = mesh.clone();
 
     let start = Instant::now();
     match method {
@@ -966,10 +991,31 @@ fn cmd_remesh(
             after.edge_length_cv
         );
     }
+    report_shape_change(&original, &mesh);
     io::save(&mesh, output)?;
     println!("Saved: {} ({:.2?})", output.display(), elapsed);
 
     Ok(())
+}
+
+/// Report how far the result moved from the input surface.
+///
+/// The other half of any claim these commands make. Triangle quality says the result is well
+/// shaped; this says it is still the same shape. Both directions are printed because they
+/// answer different questions: backward is "did the result stay on the input surface", which
+/// is what projection controls, and forward is "does the result still cover the input",
+/// which it does not.
+fn report_shape_change(original: &HalfEdgeMesh, result: &HalfEdgeMesh) {
+    let report =
+        distance::hausdorff_distance(original, result, &distance::HausdorffOptions::default());
+    println!(
+        "Shape change: Hausdorff {:.6} ({:.4}% of the bounding diagonal), rms {:.6} out / \
+         {:.6} back",
+        report.distance,
+        100.0 * report.relative(),
+        report.forward_rms,
+        report.backward_rms
+    );
 }
 
 /// Say when a remesh stopped short. These algorithms rebuild the mesh from a face list
@@ -1014,6 +1060,53 @@ fn warn_if_subdivision_stopped_early(report: &subdivide::SubdivideReport, reques
             );
         }
     }
+}
+
+fn cmd_distance(
+    a_path: &PathBuf,
+    b_path: &PathBuf,
+    samples_per_face: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let a: HalfEdgeMesh = io::load(a_path)?;
+    let b: HalfEdgeMesh = io::load(b_path)?;
+    let options = distance::HausdorffOptions {
+        samples_per_face,
+        symmetric: true,
+    };
+    let start = Instant::now();
+    let report = distance::hausdorff_distance(&a, &b, &options);
+    println!(
+        "{} ({} faces) vs {} ({} faces)",
+        a_path.display(),
+        a.num_faces(),
+        b_path.display(),
+        b.num_faces()
+    );
+    println!("  Hausdorff:   {:.6}", report.distance);
+    println!(
+        "  relative:    {:.4}% of the bounding diagonal",
+        100.0 * report.relative()
+    );
+    println!(
+        "  forward:     {:.6} (max), {:.6} (rms)  — first mesh to second",
+        report.forward, report.forward_rms
+    );
+    println!(
+        "  backward:    {:.6} (max), {:.6} (rms)  — second mesh to first",
+        report.backward, report.backward_rms
+    );
+    println!(
+        "  samples:     {} in {:.2?}",
+        report.samples,
+        start.elapsed()
+    );
+    if samples_per_face == 0 {
+        eprintln!(
+            "note: sampling vertices only understates the distance, sometimes to zero. A \
+             coarse mesh whose vertices all lie on a finer one looks identical this way."
+        );
+    }
+    Ok(())
 }
 
 fn cmd_quality(input: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {

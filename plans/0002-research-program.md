@@ -353,6 +353,49 @@ compare numerically. Cheap to design in now, painful to retrofit.
       deterministic; `tests/determinism.rs` now covers all nine mutating entry points in
       both directions — repeated runs, and threaded against sequential — comparing
       floating-point bit patterns rather than printed decimals.
+- [x] **Hausdorff distance and surface projection** (`src/algo/distance.rs`, July 2026).
+      The last M0 measurement item, and the fix for the shrinkage it was meant to measure.
+      Both needed the same nearest-triangle query, so they share one: a bounding-volume
+      hierarchy over the faces, with the exact seven-region point-triangle closest-point test
+      (Ericson). Validated against closed forms first — a point over a triangle's interior
+      measures its height, each vertex and edge region returns the right feature, parallel
+      planes offset by `d` come out exactly `d` apart, concentric spheres come out their
+      radius difference apart — and against brute force over every triangle on four meshes,
+      which is the reference precisely because it is obviously correct and hopelessly slow.
+
+      `morsel distance a.obj b.obj` reports it; `morsel remesh` and `morsel decimate` report
+      it against their own input, so both now state a shape claim alongside their quality
+      claim. Decimating the bunny to a quarter of its faces moves the surface 5.3% of the
+      bounding diagonal.
+
+      Two things worth recording about the sampling. Hausdorff distance is defined over whole
+      surfaces and is hard to compute exactly for two triangle meshes, so this samples one and
+      measures each sample exactly against the other, as the Metro tool established. Sampling
+      only vertices is badly biased and the default is therefore not zero: there is a test
+      where a flat sheet and a tent share all four of the sheet's vertices, so vertex sampling
+      reports them as *identical*. And measuring one direction is not a distance — every
+      vertex of a coarse mesh can lie exactly on a fine one while the fine one has detail the
+      coarse one omits.
+
+      **The projection, and a correction.** Vertices are now snapped back onto the input
+      surface — not only after smoothing, but the split midpoints and collapse targets too,
+      which is where most of the drift came from: projecting smoothing alone moved isotropic's
+      figure on a sphere from 2.72% to 2.70%, which is to say not at all. Anisotropic went
+      from 14.8% to 2.7%, and on the torus its Hausdorff distance to the input fell from 2.1%
+      to 0.6%.
+
+      The correction is that the earlier finding above was partly wrong. 2.7% is not a residue
+      but a *floor*: a polyhedral sphere's faces are chords, so its surface dips inside the
+      true sphere by the sagitta, and a vertex placed anywhere on that surface inherits the
+      same deviation. Measured directly by projecting true-sphere points onto the input mesh,
+      that floor is about 2.4%. Isotropic and CVT were sitting on it, not drifting past it,
+      and were never shrinking anything — only anisotropic was, at six times the floor. The
+      test calibrates the floor from the input now rather than hard-coding a number.
+
+      Also replaced CVT's private brute-force projection, which was `O(points × faces)` — on
+      the bunny, 2503 × 4968 point-triangle tests per call — and which returned the *centroid*
+      of a degenerate triangle rather than the nearest point on it.
+
 - [ ] Mesh `repair` — dropping unreferenced vertices, which currently make a mesh
       count as disconnected and so block cutting.
 - [x] Measurement harness for triangle quality (`src/algo/quality.rs`, July 2026):
@@ -380,7 +423,9 @@ compare numerically. Cheap to design in now, painful to retrofit.
         back onto the input. On a sphere of radius 0.5 the drift is 2.7% for
         isotropic, 1.2% for CVT, and **15% for anisotropic**, whose every vertex
         ends up inside the sphere. Quality numbers alone cannot settle a remeshing
-        claim, which is why `tests/remesh_quality.rs` measures both.
+        claim, which is why `tests/remesh_quality.rs` measures both. **Partly wrong,
+        corrected July 2026** — see the Hausdorff entry below. Only anisotropic was
+        shrinking; 2.7% and 1.2% are the input mesh's own faceting.
       - **CVT's default is degenerate by construction.** With
         `target_vertices: None` the seed count equals the vertex count, so each
         Voronoi cell holds about one vertex, whose centroid is that vertex, and

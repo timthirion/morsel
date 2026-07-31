@@ -24,11 +24,9 @@
 //!
 //! Geometric fidelity. A remesher could score perfectly here by discarding the shape
 //! and returning a nicely triangulated blob, so quality numbers are only half of any
-//! claim — they need pairing with a distance to the original surface. The tests in
-//! `tests/remesh_quality.rs` sidestep that for now by remeshing a sphere of known
-//! radius, where drift off the surface is directly measurable, but a general Hausdorff
-//! distance is still missing. It matters: all three remeshers score better on this
-//! metric partly *by* shrinking the mesh.
+//! claim — they need pairing with a distance to the original surface. That distance lives in
+//! [`crate::algo::distance`], and pairing the two is what the `remesh` and `decimate`
+//! commands now print: quality before and after, then the Hausdorff distance to the input.
 
 use crate::mesh::{FaceId, HalfEdgeMesh, MeshIndex};
 

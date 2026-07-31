@@ -44,6 +44,13 @@ pub struct AnisotropicOptions {
 
     /// Whether to use parallel execution (default: true).
     pub parallel: bool,
+
+    /// Snap smoothed vertices back onto the input surface (default: true).
+    ///
+    /// Without this, remeshing shrinks the mesh. Anisotropic was much the worst of the
+    /// three: on a sphere of radius 0.5 every one of its vertices ended up inside the
+    /// sphere, drifting as much as 15% inward.
+    pub project_to_surface: bool,
 }
 
 impl AnisotropicOptions {
@@ -58,6 +65,7 @@ impl AnisotropicOptions {
             smoothing_lambda: 0.5,
             adaptation: 1.0,
             parallel: true,
+            project_to_surface: true,
         }
     }
 
@@ -70,6 +78,12 @@ impl AnisotropicOptions {
     /// Set whether to preserve boundary edges.
     pub fn with_preserve_boundary(mut self, preserve: bool) -> Self {
         self.preserve_boundary = preserve;
+        self
+    }
+
+    /// Set whether smoothed vertices are snapped back onto the input surface.
+    pub fn with_project_to_surface(mut self, project: bool) -> Self {
+        self.project_to_surface = project;
         self
     }
 
@@ -140,6 +154,12 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
         return unchanged(0, false);
     }
 
+    // Built from the input, once: the reference has to be the shape the caller handed us,
+    // not the drifted one.
+    let reference = options
+        .project_to_surface
+        .then(|| crate::algo::distance::SurfaceIndex::new(mesh));
+
     let mut converged = true;
     let mut iterations_run = 0;
     for iter in 0..options.iterations {
@@ -162,6 +182,7 @@ fn anisotropic_remesh_internal<I: MeshIndex>(
                 options.smoothing_lambda,
                 options.preserve_boundary,
                 options.parallel,
+                reference.as_ref(),
             );
         }
 
