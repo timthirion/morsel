@@ -332,14 +332,27 @@ compare numerically. Cheap to design in now, painful to retrofit.
       than orienting by the path direction — assigned faces across the cut. The
       symptom was not local: the cylinder came back with 13 boundary loops and the
       bunny and sphere with bowtie vertices. Neither pointed at the fan.
-- [ ] **Make isotropic remeshing deterministic.** Measured July 2026: four runs of the
-      same input give four different meshes, and `parallel` disagrees with sequential, on
-      every example mesh. Verified to predate the July 2026 quality work by running the
-      probe against the previous commit. The causes are the same class as QEM's — the
-      split pass iterates a `HashMap` of edges and a `HashSet` of faces, and the flip pass
-      has its own — but there are several rather than one comparison to fix. Decimation's
-      fix is the template: give the ordering a total tiebreak rather than sorting hash
-      iteration order.
+- [x] **Every mutating algorithm is deterministic** (July 2026). Isotropic and
+      anisotropic remeshing each gave four different meshes in four runs, and disagreed
+      between threaded and single-threaded. Three causes, all the same shape as QEM's:
+
+      1. The split pass sorted long edges by length alone. Midpoint vertices are appended
+         in that order, so the *indices* of every new vertex followed hash iteration order.
+      2. The flip pass chose an independent set from candidates gathered by iterating a
+         `HashMap`.
+      3. `build_vertex_neighbors` returned unsorted adjacency, and `tangential_smooth`
+         *sums* a vertex's neighbours to find their centroid. Floating-point addition is
+         not associative, so the smoothed position depended on the order — and this is
+         what made `parallel` disagree with sequential, since both paths shared it.
+
+      The third is the one worth remembering: the first two are orderings, which are easy
+      to spot once you are looking for them, but a summation over a hash container reads as
+      pure arithmetic.
+
+      CVT remeshing, both subdivision schemes, and all three smoothers were already
+      deterministic; `tests/determinism.rs` now covers all nine mutating entry points in
+      both directions — repeated runs, and threaded against sequential — comparing
+      floating-point bit patterns rather than printed decimals.
 - [ ] Mesh `repair` — dropping unreferenced vertices, which currently make a mesh
       count as disconnected and so block cutting.
 - [x] Measurement harness for triangle quality (`src/algo/quality.rs`, July 2026):

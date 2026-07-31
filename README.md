@@ -275,9 +275,13 @@ aggregate numbers anywhere — worst and mean pointing in opposite directions, w
 *height* of thin triangles rather than their base, twenty passes deep; splits now decline
 below a 1° floor, and the bunny's worst triangle comes out better than the input's.
 
-Isotropic remeshing is not yet reproducible, though: repeated runs on the same input give
-different meshes, and threaded and single-threaded runs disagree. `decimate` was fixed for
-this and `remesh` has not been.
+Every command that changes a mesh is reproducible: the same input and options give the same
+output down to the bit, and threading does not change the answer.
+[`tests/determinism.rs`](tests/determinism.rs) checks all nine of them by floating-point bit
+pattern. Three of the causes lived in the remeshers, and the subtlest is worth knowing about:
+adjacency lists were built from a `HashSet` and then *summed* to find a smoothing centroid,
+and floating-point addition is not associative, so the result depended on hash iteration
+order — which was also why threaded and single-threaded runs disagreed.
 
 `geodesic` defaults to the heat method, which measures distance across faces.
 `--method dijkstra` walks the edge graph instead and can only overestimate — by 15%

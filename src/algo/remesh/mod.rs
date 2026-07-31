@@ -12,10 +12,10 @@
 //! three that reliably improves triangle quality; `tests/remesh_quality.rs` measures all
 //! of them with [`crate::algo::quality`] and records what each actually does.
 //!
-//! One caveat on all three: they are not reproducible. Repeated runs on the same input
-//! give different meshes, because several passes iterate hash containers and order the
-//! work by that iteration. Decimation had the same problem and was fixed by giving its
-//! candidate ordering a total tiebreak; the remeshers have not been.
+//! All three are reproducible: the same input and options give the same mesh down to the
+//! bit, and threaded runs agree with single-threaded ones. That was not true of isotropic
+//! or anisotropic until July 2026 — see `tests/determinism.rs` for what was wrong and
+//! `build_vertex_neighbors` for the subtlest of the three causes.
 //!
 //! The caveats on the other two are not stylistic:
 //!
@@ -612,6 +612,11 @@ pub(crate) fn flip_edges_for_valence_faces(
             break;
         }
 
+        // `topology.edge_faces` is a `HashMap`, so the candidates arrive in hash order and
+        // the independent set selected below depends on it. Sorting makes the flip sequence
+        // — and so the output mesh — the same on every run.
+        candidate_edges.sort_unstable();
+
         // Select independent edges (no shared vertices or adjacent faces)
         let mut used_vertices: HashSet<usize> = HashSet::new();
         let mut edges_to_flip: Vec<(usize, usize)> = Vec::new();
@@ -1059,6 +1064,13 @@ pub(crate) fn compute_boundary_vertices(
 }
 
 /// Build adjacency list from faces.
+/// Adjacency lists, each **sorted ascending**.
+///
+/// The sort is not cosmetic. `tangential_smooth` sums a vertex's neighbours to find their
+/// centroid, and floating-point addition is not associative, so an unsorted list makes the
+/// result depend on `HashSet` iteration order — which Rust reseeds per instance. That was
+/// enough on its own to make isotropic remeshing return a different mesh on every run, and
+/// to make its `parallel` and sequential paths disagree.
 pub(crate) fn build_vertex_neighbors(faces: &[[usize; 3]], num_vertices: usize) -> Vec<Vec<usize>> {
     let mut neighbors: Vec<HashSet<usize>> = vec![HashSet::new(); num_vertices];
 
@@ -1073,7 +1085,11 @@ pub(crate) fn build_vertex_neighbors(faces: &[[usize; 3]], num_vertices: usize) 
 
     neighbors
         .into_iter()
-        .map(|s| s.into_iter().collect())
+        .map(|s| {
+            let mut v: Vec<usize> = s.into_iter().collect();
+            v.sort_unstable();
+            v
+        })
         .collect()
 }
 

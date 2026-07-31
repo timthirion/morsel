@@ -377,13 +377,21 @@ fn split_long_edges_with_progress<I: MeshIndex>(
             );
         }
 
-        // Sort by length descending
+        // Longest first, then by edge so the order is total.
+        //
+        // The tiebreak matters more than it looks: midpoint vertices are appended in this
+        // order, so without it the *indices* of every new vertex depend on the hash
+        // iteration order that produced `long_edges`, and two runs of the same input give
+        // differently numbered — and then differently smoothed — meshes.
         long_edges.sort_by(|a, b| {
             let (v0a, v1a) = a.0;
             let (v0b, v1b) = b.0;
             let len_a = (vertices[v1a] - vertices[v0a]).norm_squared();
             let len_b = (vertices[v1b] - vertices[v0b]).norm_squared();
-            len_b.partial_cmp(&len_a).unwrap()
+            len_b
+                .total_cmp(&len_a)
+                .then_with(|| v0a.cmp(&v0b))
+                .then_with(|| v1a.cmp(&v1b))
         });
 
         // Create a map from edge to midpoint vertex index
