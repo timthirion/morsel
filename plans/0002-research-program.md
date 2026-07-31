@@ -332,6 +332,14 @@ compare numerically. Cheap to design in now, painful to retrofit.
       than orienting by the path direction — assigned faces across the cut. The
       symptom was not local: the cylinder came back with 13 boundary loops and the
       bunny and sphere with bowtie vertices. Neither pointed at the fan.
+- [ ] **Make isotropic remeshing deterministic.** Measured July 2026: four runs of the
+      same input give four different meshes, and `parallel` disagrees with sequential, on
+      every example mesh. Verified to predate the July 2026 quality work by running the
+      probe against the previous commit. The causes are the same class as QEM's — the
+      split pass iterates a `HashMap` of edges and a `HashSet` of faces, and the flip pass
+      has its own — but there are several rather than one comparison to fix. Decimation's
+      fix is the template: give the ordering a total tiebreak rather than sorting hash
+      iteration order.
 - [ ] Mesh `repair` — dropping unreferenced vertices, which currently make a mesh
       count as disconnected and so block cutting.
 - [x] Measurement harness for triangle quality (`src/algo/quality.rs`, July 2026):
@@ -369,7 +377,8 @@ compare numerically. Cheap to design in now, painful to retrofit.
       - **Isotropic emits a degenerate face on the bunny.** Mean minimum angle
         35.9° → 51.4° and mean radius ratio 0.74 → 0.95, its best aggregate result
         of the five meshes — with a worst angle of `5.5e-8°`. The single strongest
-        argument for reporting worst and mean side by side.
+        argument for reporting worst and mean side by side. **Fixed July 2026**, see
+        below.
 - [x] **Every discarded rebuild error is now reported** (July 2026). Nine sites, not
       eight — the isotropic collapse pass `match`ed on the result but only logged it
       under `debug_assertions`. Each could report success having done nothing, and the

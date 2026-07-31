@@ -268,11 +268,16 @@ iteration has nothing to move. None of the three projects vertices back onto the
 surface, so all of them shrink it — by 2.7%, 1.2% and 15% respectively on a sphere of
 radius 0.5.
 
-That reporting is worth having for a specific reason: on the bunny, isotropic remeshing
-lifts the mean minimum angle from 35.9° to 51.4° and the mean radius ratio from 0.74 to
-0.95 — its best aggregate result anywhere — while emitting one triangle with an angle of
-`5.5e-8°`. Worst and mean can point in opposite directions, so `quality` prints both,
-along with a 10° histogram of minimum angles.
+That reporting is worth having, and it earned its keep immediately. It caught isotropic
+remeshing emitting a triangle with a `5.5e-8°` angle on the bunny while posting its best
+aggregate numbers anywhere — worst and mean pointing in opposite directions, which is why
+`quality` prints both along with a 10° histogram. The cause was the split pass halving the
+*height* of thin triangles rather than their base, twenty passes deep; splits now decline
+below a 1° floor, and the bunny's worst triangle comes out better than the input's.
+
+Isotropic remeshing is not yet reproducible, though: repeated runs on the same input give
+different meshes, and threaded and single-threaded runs disagree. `decimate` was fixed for
+this and `remesh` has not been.
 
 `geodesic` defaults to the heat method, which measures distance across faces.
 `--method dijkstra` walks the edge graph instead and can only overestimate — by 15%

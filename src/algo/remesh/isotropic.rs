@@ -232,6 +232,26 @@ pub fn average_edge_length<I: MeshIndex>(mesh: &HalfEdgeMesh<I>) -> f64 {
     }
 }
 
+/// Smallest interior angle a split or collapse is allowed to create, in radians (1°).
+///
+/// A floor rather than a ratio to the parent's angle, because a ratio still permits
+/// unbounded decay over twenty passes — halving something twenty times is what produced
+/// the 5.5e-8° triangle in the first place. The cost is that a mesh with features
+/// genuinely thinner than 1° will not be refined or coarsened across them, which is a
+/// better failure than manufacturing slivers: the input's own worst triangle is preserved
+/// rather than made worse.
+const MIN_ANGLE_FLOOR: f64 = 0.017_453_292_519_943_295; // 1° in radians
+
+/// Smallest interior angle of the triangle `p q r`, in radians.
+///
+/// `atan2` of the cross and dot products rather than `acos` of a normalised dot, which
+/// loses all precision on exactly the thin triangles this exists to detect.
+fn min_angle_of(p: &Point3<f64>, q: &Point3<f64>, r: &Point3<f64>) -> f64 {
+    let at =
+        |u: nalgebra::Vector3<f64>, v: nalgebra::Vector3<f64>| u.cross(&v).norm().atan2(u.dot(&v));
+    at(q - p, r - p).min(at(r - q, p - q)).min(at(p - r, q - r))
+}
+
 /// Split all edges longer than the threshold (with progress reporting).
 ///
 /// Uses batch processing: collect all long edges, split them simultaneously.
@@ -286,8 +306,8 @@ fn split_long_edges_with_progress<I: MeshIndex>(
 
         // Find long edges (excluding boundary if preserving)
         let mut long_edges: Vec<((usize, usize), Vec<usize>)> = edge_to_faces
-            .into_iter()
-            .filter(|((v0, v1), _)| {
+            .iter()
+            .filter(|((v0, v1), fis)| {
                 let dx = vertices[*v1].x - vertices[*v0].x;
                 let dy = vertices[*v1].y - vertices[*v0].y;
                 let dz = vertices[*v1].z - vertices[*v0].z;
@@ -298,8 +318,48 @@ fn split_long_edges_with_progress<I: MeshIndex>(
                 if preserve_boundary && boundary_edges.contains(&(*v0, *v1)) {
                     return false;
                 }
-                true
+                // Prefer the longest edge of a face, and never split into a sliver.
+                //
+                // Splitting an edge halves it, but what that does to the *shape* of the
+                // faces around it depends on which edge it is. For a thin triangle whose
+                // apex `C` sits near the line `AB`, splitting the base `AB` halves the base
+                // and doubles the minimum angle; splitting a side `AC` halves the
+                // triangle's *height* and halves the angle. Both sides of a sliver are
+                // long, so both were being split, and this loop runs up to 20 passes: the
+                // Stanford bunny's worst triangle fell from 1.50° to 5.5e-8°, which put
+                // curvature values of 6e7 on the vertices around it.
+                //
+                // Preferring longest edges (Rivara's longest-edge bisection) is most of the
+                // answer, but not all of it: an edge can be the longest edge of one of its
+                // faces and a *side* of the other, and splitting it still flattens that
+                // other face. Rivara handles this by recursively splitting the neighbour's
+                // longest edge first; the cheaper guard used here is to look at what the
+                // split would actually produce and decline if any resulting triangle would
+                // be a sliver.
+                let is_longest_somewhere = fis.iter().any(|&fi| {
+                    let f = faces[fi];
+                    let side =
+                        |a: usize, b: usize| (vertices[f[b]] - vertices[f[a]]).norm_squared();
+                    let longest = side(0, 1).max(side(1, 2)).max(side(2, 0));
+                    // A relative tolerance, so an equilateral triangle splits rather than
+                    // deadlocking on exact ties.
+                    len_sq >= longest * (1.0 - 1e-9)
+                });
+                if !is_longest_somewhere {
+                    return false;
+                }
+                let midpoint = Point3::from((vertices[*v0].coords + vertices[*v1].coords) * 0.5);
+                fis.iter().all(|&fi| {
+                    let f = faces[fi];
+                    // The corner of this face opposite the edge being split.
+                    let Some(&w) = f.iter().find(|&&x| x != *v0 && x != *v1) else {
+                        return false; // a face repeating a vertex has no shape to preserve
+                    };
+                    min_angle_of(&vertices[*v0], &midpoint, &vertices[w]) >= MIN_ANGLE_FLOOR
+                        && min_angle_of(&midpoint, &vertices[*v1], &vertices[w]) >= MIN_ANGLE_FLOOR
+                })
             })
+            .map(|(edge, fis)| (*edge, fis.clone()))
             .collect();
 
         if long_edges.is_empty() {
@@ -484,6 +544,7 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
             if length < low_threshold
                 && can_collapse_edge_fast(
                     &vertices,
+                    &faces,
                     &topology,
                     v0,
                     v1,
@@ -499,18 +560,44 @@ fn collapse_short_edges_with_progress<I: MeshIndex>(
             break;
         }
 
-        // Sort by length (shortest first) to prioritize removing very short edges
-        candidate_edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+        // Shortest first, then by edge so the order is total. `candidate_edges` was
+        // gathered from a `HashMap`'s keys, so without the tiebreak equal-length edges are
+        // ordered by hash iteration and the result varies between runs.
+        candidate_edges.sort_by(|a, b| {
+            a.2.total_cmp(&b.2)
+                .then_with(|| a.0.cmp(&b.0))
+                .then_with(|| a.1.cmp(&b.1))
+        });
 
-        // Select independent edges (just check edge vertices, not neighbors)
+        // Select collapses that cannot interfere with each other.
+        //
+        // Marking only the two endpoints as used is not enough, and this pass used to do
+        // exactly that — the comment here even said so. `can_collapse_edge_fast` checks a
+        // link condition against the *pre-batch* topology, but collapsing an edge changes
+        // the link of every vertex in its 1-ring: if `a` is a common neighbour of `c` and
+        // `d`, merging `a` into `b` changes how many common neighbours `(c, d)` has, and a
+        // collapse that was legal when checked is not legal when performed. On the torus
+        // that produced a face list `build_from_triangles` rejected, so every collapse pass
+        // was discarded and the mesh came back unchanged, five iterations running.
+        //
+        // Marking each endpoint's neighbours as used as well is sufficient. A later edge
+        // `(c, d)` is then guaranteed that `c, d ∉ {a, b} ∪ N(a) ∪ N(b)`, which by symmetry
+        // means `a, b ∉ N(c) ∪ N(d)` — so neither the endpoints nor the link of `(c, d)` is
+        // touched by collapsing `(a, b)`, and its check still holds. The cost is smaller
+        // batches, which the batch loop absorbs.
         let mut used_vertices: HashSet<usize> = HashSet::new();
         let mut edges_to_collapse: Vec<(usize, usize)> = Vec::new();
 
         for (v0, v1, _len) in candidate_edges {
-            if !used_vertices.contains(&v0) && !used_vertices.contains(&v1) {
-                edges_to_collapse.push((v0, v1));
-                used_vertices.insert(v0);
-                used_vertices.insert(v1);
+            if used_vertices.contains(&v0) || used_vertices.contains(&v1) {
+                continue;
+            }
+            edges_to_collapse.push((v0, v1));
+            for v in [v0, v1] {
+                used_vertices.insert(v);
+                if let Some(neighbors) = topology.vertex_neighbors.get(v) {
+                    used_vertices.extend(neighbors.iter().copied());
+                }
             }
         }
 
@@ -640,6 +727,7 @@ fn can_collapse_edge(
 /// Check if an edge can be safely collapsed (O(1) using pre-computed topology).
 fn can_collapse_edge_fast(
     vertices: &[Point3<f64>],
+    faces: &[[usize; 3]],
     topology: &MeshTopology,
     v0: usize,
     v1: usize,
@@ -682,6 +770,39 @@ fn can_collapse_edge_fast(
 
     if !is_boundary && common_count != 2 {
         return false;
+    }
+
+    // Every surviving face that used either endpoint changes shape, because the merged
+    // vertex lands at the midpoint. Decline if any of them would become a sliver.
+    //
+    // Nothing here checked shape before, so collapsing was free to manufacture
+    // near-degenerate triangles the same way splitting was. It matters more now than it
+    // used to: while the batch selection was unsound, collapse passes were being rejected
+    // wholesale and never applied, which hid this.
+    let mid = Point3::from(midpoint);
+    let mut checked: HashSet<usize> = HashSet::new();
+    for &v in &[v0, v1] {
+        for &n in topology.neighbors(v).iter() {
+            let key = if v < n { (v, n) } else { (n, v) };
+            let Some(face_indices) = topology.edge_faces.get(&key) else {
+                continue;
+            };
+            for &fi in face_indices {
+                if !checked.insert(fi) {
+                    continue;
+                }
+                let f = faces[fi];
+                // The two faces along the collapsed edge disappear; they have no shape to
+                // preserve.
+                if f.contains(&v0) && f.contains(&v1) {
+                    continue;
+                }
+                let at = |x: usize| if x == v0 || x == v1 { mid } else { vertices[x] };
+                if min_angle_of(&at(f[0]), &at(f[1]), &at(f[2])) < MIN_ANGLE_FLOOR {
+                    return false;
+                }
+            }
+        }
     }
 
     true

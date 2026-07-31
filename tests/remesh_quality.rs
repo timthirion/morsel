@@ -59,11 +59,17 @@ fn isotropic_remeshing_improves_aggregate_quality() {
     }
 }
 
-/// On three of those four the worst triangle improves too. The bunny is the exception
-/// and gets its own test.
+/// The worst triangle improves too, where there is room to improve it.
+///
+/// The torus is deliberately absent, and the reason is worth stating: its worst angle goes
+/// from 27.5° to about 16.8°. That is isotropic remeshing doing its job — trading the worst
+/// case for uniform edge lengths, with the mean rising 35.6° to 49.2° and the edge-length
+/// cv falling 0.29 to 0.16. It used to *appear* to improve the worst angle only because its
+/// collapse pass produced a face list the half-edge representation rejected, so the pass
+/// was discarded and never applied at all.
 #[test]
 fn isotropic_remeshing_improves_the_worst_triangle_on_smooth_meshes() {
-    for name in ["sphere", "spherical-cap", "torus"] {
+    for name in ["sphere", "spherical-cap"] {
         let mesh = load(name);
         let before = quality(&mesh);
 
@@ -81,17 +87,22 @@ fn isotropic_remeshing_improves_the_worst_triangle_on_smooth_meshes() {
     }
 }
 
-/// **Recorded defect.** On the bunny, isotropic remeshing improves every aggregate
-/// measure dramatically — mean minimum angle 35.9° to 51.4°, mean radius ratio 0.74 to
-/// 0.95 — while driving the *worst* triangle to 5.5e-8 degrees: a face with no usable
-/// area at all.
+/// **Fixed defect, kept as a regression test.** Isotropic remeshing used to drive the
+/// bunny's worst triangle to 5.5e-8 degrees while improving every aggregate measure — its
+/// best-looking result of the five meshes, and a face with no usable area, which put
+/// curvature values of 6e7 on the vertices around it.
 ///
-/// This is the case for reporting worst and mean side by side. Judged on the mean
-/// alone this looks like the remesher's best result of the five, and a degenerate face
-/// will break anything downstream that divides by an area — the cotangent Laplacian,
-/// for one.
+/// The cause was the split pass. Halving an edge does opposite things to a thin triangle
+/// depending on which edge it is: splitting the base of a sliver halves the base and
+/// *doubles* the minimum angle, while splitting a side halves the triangle's *height* and
+/// halves the angle. Both sides of a sliver exceed the length threshold, so both were
+/// split, and the pass loops up to twenty times — 1.5° / 2²⁰ is about 1.4e-6°.
+///
+/// Splits now decline when they would produce a triangle below a 1° floor, so the worst
+/// triangle comes out *better* than the input's rather than eight orders of magnitude
+/// worse.
 #[test]
-fn isotropic_remeshing_emits_a_degenerate_face_on_the_bunny() {
+fn isotropic_remeshing_no_longer_degenerates_the_bunny() {
     let mesh = load("stanford-bunny");
     let before = quality(&mesh);
     assert!(
@@ -105,17 +116,24 @@ fn isotropic_remeshing_emits_a_degenerate_face_on_the_bunny() {
     let after = quality(&after_mesh);
 
     assert!(
-        after.mean_min_angle_deg > before.mean_min_angle_deg,
-        "the aggregate improvement is the other half of this finding"
-    );
-    // 5.5e-8 degrees, stable across runs. Not literally zero, but a triangle whose
-    // area no downstream calculation can divide by.
-    assert!(
-        after.min_angle_deg < 1e-6,
-        "the recorded defect is a degenerate face; worst angle is now {:.3e}°, so if it \
-         has genuinely been fixed this test should be updated deliberately",
+        after.min_angle_deg > before.min_angle_deg,
+        "worst angle {:.4}° -> {:.4}°, expected an improvement",
+        before.min_angle_deg,
         after.min_angle_deg
     );
+    assert!(
+        after.min_angle_deg > 1.0,
+        "worst angle {:.3e}° is below the 1° floor splits are supposed to respect",
+        after.min_angle_deg
+    );
+    assert!(
+        after.min_radius_ratio > 1e-3,
+        "radius ratio {:.3e} still indicates a near-degenerate face",
+        after.min_radius_ratio
+    );
+    // The aggregate gains are the other half: this was never a tradeoff.
+    assert!(after.mean_min_angle_deg > before.mean_min_angle_deg + 10.0);
+    assert!(after.mean_radius_ratio > before.mean_radius_ratio + 0.1);
 }
 
 /// The cylinder is already uniformly triangulated, so there is nothing for isotropic

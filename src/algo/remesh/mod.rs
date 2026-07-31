@@ -12,6 +12,11 @@
 //! three that reliably improves triangle quality; `tests/remesh_quality.rs` measures all
 //! of them with [`crate::algo::quality`] and records what each actually does.
 //!
+//! One caveat on all three: they are not reproducible. Repeated runs on the same input
+//! give different meshes, because several passes iterate hash containers and order the
+//! work by that iteration. Decimation had the same problem and was fixed by giving its
+//! candidate ordering a total tiebreak; the remeshers have not been.
+//!
 //! The caveats on the other two are not stylistic:
 //!
 //! - **Anisotropic** improves the *mean* triangle quality everywhere but makes the
