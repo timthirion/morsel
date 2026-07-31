@@ -458,8 +458,10 @@ compare numerically. Cheap to design in now, painful to retrofit.
       asked to become one face. There is now a `DecimateOutcome::Exhausted` for it.
       `BackedOff` and `Refused` are kept but should be unreachable; they are the guard
       against a topological argument turning out not to be a proof.
-- [ ] Expose `geodesic` in the CLI. The CVT and anisotropic remeshers are exposed
-      now (`morsel remesh --method cvt|anisotropic`) and covered by the sweep.
+- [x] Every algorithm in the library is reachable from the CLI. `geodesic` already
+      was when this item was written — it was stale. The CVT and anisotropic
+      remeshers were added in July 2026 (`morsel remesh --method cvt|anisotropic`),
+      along with `morsel quality` and `morsel cut`, and all are covered by the sweep.
 
 ### M1 — choose and open a lane (≈ 6–18 months)
 
